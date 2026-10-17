@@ -3,6 +3,8 @@
 Rust port of [simplewall](https://github.com/henrypp/simplewall) 3.9.1 by Henry++.
 The original program is GPL-3.0. This port is GPL-3.0 as well. See `LICENSE`.
 
+![simplewall window](images/simplewall.png)
+
 simplewall configures the Windows Filtering Platform. It does not talk to the Windows Firewall service.
 Filters use the original provider `B0D553E2-C6A0-4A9A-AEB8-C752483ED62F` and sublayer `9FEE6F59-B951-4F9A-B52F-133DCF7A4279`. **Disable filters** removes filters owned by that provider.
 
