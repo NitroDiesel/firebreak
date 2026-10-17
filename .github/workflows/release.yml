@@ -1,0 +1,43 @@
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install NSIS
+        run: choco install nsis --no-progress -y
+
+      - name: Build setup and portable zip
+        shell: pwsh
+        run: ./installer/build.ps1
+        env:
+          SIMPLEWALL_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '3.9.1' }}
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'v3.9.1' }}
+          name: simplewall ${{ github.ref_type == 'tag' && github.ref_name || '3.9.1' }}
+          make_latest: true
+          files: |
+            dist/*.exe
+            dist/*.zip
+          body: |
+            Rust port of simplewall.
+            `simplewall-*-setup.exe` is the NSIS installer.
+            `simplewall-*-bin.zip` is the portable build.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

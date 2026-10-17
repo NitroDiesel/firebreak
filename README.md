@@ -31,7 +31,9 @@ Checked apps are permitted. A lowest-weight block filter drops every other ALE c
 
 User and custom allow rules sit above the blocklist. Turn that off with "User allows beat blocklist" if a blocklist entry must win. "Allow LAN" permits private, link-local, and multicast ranges. Search accepts a substring, a `re:` prefix, or the Regex checkbox. Pin keeps an app at the top of the list. The comment field is stored on the app.
 
-Create `simplewall.ini` next to the executable to store `profile.xml` in that folder. Otherwise the profile is `%APPDATA%\simplewall-rust\profile.xml`.
+Create `simplewall.ini` next to the executable to store `profile.xml` in that folder. Otherwise the profile is `%ProgramData%\simplewall-rust\profile.xml`, which still exists after reboot when Administrator Protection isolates the elevated account. An older `%APPDATA%\simplewall-rust\profile.xml` is read once if the ProgramData file is not there yet.
+
+Installer and portable zip are built on GitHub by the `release` workflow, not on a workstation. Run that workflow, or push a `v*` tag. The assets are attached to the GitHub release.
 
 ## What this port covers
 

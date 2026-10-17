@@ -19,11 +19,9 @@ pub fn load() -> Profile {
         rules: parse_internal(),
         ..Profile::default()
     };
-    if let Some(path) = user_path() {
-        if path.exists() {
-            if let Ok(text) = fs::read_to_string(&path) {
-                merge_user(&mut profile, &text);
-            }
+    if let Some(path) = load_path() {
+        if let Ok(text) = fs::read_to_string(&path) {
+            merge_user(&mut profile, &text);
         }
     }
     profile
@@ -31,19 +29,53 @@ pub fn load() -> Profile {
 
 pub fn save(profile: &Profile) -> Result<PathBuf, String> {
     let path = user_path().ok_or_else(|| "could not resolve a profile directory".to_string())?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    fs::write(&path, write_user(profile)).map_err(|e| e.to_string())?;
+    write_profile(&path, profile)?;
     Ok(path)
 }
 
+fn write_profile(path: &Path, profile: &Profile) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(path, write_user(profile)).map_err(|e| e.to_string())
+}
+
+/// Where new settings are written.
+///
+/// Portable mode (`simplewall.ini` beside the exe) stays next to the exe.
+/// Otherwise settings go to `%ProgramData%\simplewall-rust`. Administrator
+/// Protection runs the elevated process under a shadow account, so
+/// `%APPDATA%` from that process is not the profile that exists after reboot
+/// (henrypp/simplewall#2163).
 pub fn user_path() -> Option<PathBuf> {
+    portable_path().or_else(program_data_path).or_else(appdata_path)
+}
+
+/// Newest file the user can still have: portable, then ProgramData, then the
+/// old AppData location so an existing profile is not dropped.
+fn load_path() -> Option<PathBuf> {
+    [portable_path(), program_data_path(), appdata_path()]
+        .into_iter()
+        .flatten()
+        .find(|path| path.exists())
+}
+
+fn portable_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
     if dir.join("simplewall.ini").exists() {
-        return Some(dir.join("profile.xml"));
+        Some(dir.join("profile.xml"))
+    } else {
+        None
     }
+}
+
+fn program_data_path() -> Option<PathBuf> {
+    let base = std::env::var_os("ProgramData")?;
+    Some(PathBuf::from(base).join("simplewall-rust").join("profile.xml"))
+}
+
+fn appdata_path() -> Option<PathBuf> {
     let appdata = std::env::var_os("APPDATA")?;
     Some(PathBuf::from(appdata).join("simplewall-rust").join("profile.xml"))
 }

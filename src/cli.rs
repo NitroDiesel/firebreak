@@ -83,7 +83,8 @@ simplewall {ver} (Rust port)
 \"simplewall.exe -help\" - show this message.
 
 With no arguments, the window opens. Create simplewall.ini next to the
-executable for a portable profile.xml.",
+executable for a portable profile.xml. Otherwise settings are stored in
+%ProgramData%\\simplewall-rust\\profile.xml.",
         ver = crate::model::APP_VERSION
     );
 }
