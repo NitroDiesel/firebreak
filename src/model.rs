@@ -291,6 +291,8 @@ settings! {
     log_to_file: bool = false,
     /// IsLogUiEnabled: collect dropped packets for the Packets log tab.
     log_ui: bool = true,
+    /// LogSizeLimitKb: the log file starts over once it reaches this size. 0 = no limit.
+    log_size_limit_kb: u64 = 1024,
     /// IsNotificationsEnabled
     notifications: bool = true,
     /// IsNotificationsSound

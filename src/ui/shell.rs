@@ -176,3 +176,39 @@ unsafe fn icon_pixels(info: SHFILEINFOW) -> Option<ColorImage> {
     }
     out
 }
+
+/// The desktop area not covered by the taskbar, in physical pixels.
+pub fn work_area() -> Option<windows::Win32::Foundation::RECT> {
+    use windows::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS};
+    let mut rect = windows::Win32::Foundation::RECT::default();
+    unsafe {
+        SystemParametersInfoW(
+            SPI_GETWORKAREA,
+            0,
+            Some(&mut rect as *mut _ as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+        .ok()?;
+    }
+    Some(rect)
+}
+
+/// A full-screen game, video, or presentation is in front (`_r_wnd_isfullscreenmode`).
+pub fn fullscreen_app_in_front() -> bool {
+    use windows::Win32::UI::Shell::{
+        SHQueryUserNotificationState, QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
+    };
+    matches!(
+        unsafe { SHQueryUserNotificationState() },
+        Ok(state) if state == QUNS_BUSY || state == QUNS_RUNNING_D3D_FULL_SCREEN || state == QUNS_PRESENTATION_MODE
+    )
+}
+
+/// The C build's notification sound (NOTIFY_SOUND_NAME).
+pub fn play_alert_sound() {
+    use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT};
+    let name = wide("MailBeep");
+    unsafe {
+        let _ = PlaySoundW(PCWSTR(name.as_ptr()), None, SND_ALIAS | SND_ASYNC | SND_NODEFAULT);
+    }
+}

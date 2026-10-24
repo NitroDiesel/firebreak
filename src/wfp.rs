@@ -6,8 +6,6 @@
 //!
 //! Install is explicit. Nothing here runs during `cargo test`.
 
-use std::collections::HashMap;
-use std::net::{Ipv4Addr, Ipv6Addr};
 
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
@@ -42,9 +40,12 @@ const ICMP_TYPE: windows::core::GUID = FWPM_CONDITION_IP_LOCAL_PORT;
 const MATCH_FILTER: u32 = 0x1;
 /// Cap per rule, so one huge rule cannot flood the engine.
 const MAX_FILTERS_PER_RULE: u32 = 128;
-const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
+pub(crate) const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
+/// Name of the catch-all block filter (FWN_BLOCK_CONNECTION). A drop by it means
+/// the app itself is not allowed, which is what raises a notification.
+pub(crate) const BLOCK_ALL_NAME: &str = "BlockConnection";
 
-fn win(code: u32, what: &str) -> Result<(), String> {
+pub(crate) fn win(code: u32, what: &str) -> Result<(), String> {
     if code == 0 {
         Ok(())
     } else {
@@ -111,7 +112,8 @@ pub fn install(profile: &Profile, temporary: bool) -> Result<String, String> {
             }
         };
         transact(engine.handle, false)?;
-        let _ = set_collect(engine.handle, profile.settings.log_ui);
+        let s = &profile.settings;
+        let _ = set_collect(engine.handle, s.log_ui || s.log_to_file || s.notifications);
         skipped
     };
     let mut msg = if temporary {
@@ -150,14 +152,14 @@ pub fn uninstall() -> Result<String, String> {
     Ok("Filters are disabled!".into())
 }
 
-struct Engine {
-    handle: HANDLE,
+pub(crate) struct Engine {
+    pub(crate) handle: HANDLE,
 }
 
 impl Engine {
     /// A dynamic session would delete "until reboot" filters as soon as the handle
     /// closes. Temporary filters are simply added without the persistent flag.
-    fn open() -> Result<Self, String> {
+    pub(crate) fn open() -> Result<Self, String> {
         unsafe {
             let name = wide(APP_NAME);
             let desc = wide("simplewall rust session");
@@ -196,7 +198,7 @@ unsafe fn transact(engine: HANDLE, begin: bool) -> Result<(), String> {
     }
 }
 
-fn provider_guid() -> windows::core::GUID {
+pub(crate) fn provider_guid() -> windows::core::GUID {
     windows::core::GUID::from_u128(0xB0D553E2_C6A0_4A9A_AEB8_C752483ED62F)
 }
 
@@ -327,7 +329,7 @@ unsafe fn add_ipv6_bootstrap(engine: HANDLE, persistent: bool) -> Result<(), Str
 
 unsafe fn add_block_all(engine: HANDLE, persistent: bool) -> Result<(), String> {
     for layer in connect_and_accept() {
-        add_filter(engine, "BlockConnection", layer, WEIGHT_LOWEST, false, persistent, &mut [])?;
+        add_filter(engine, BLOCK_ALL_NAME, layer, WEIGHT_LOWEST, false, persistent, &mut [])?;
     }
     Ok(())
 }
@@ -867,8 +869,9 @@ fn range_u32(low: u32, high: u32) -> FWP_RANGE0 {
     range
 }
 
-/// Turn the engine's dropped-packet event buffer on or off (the "UI log" toggle).
-pub fn set_packet_log(on: bool) -> Result<(), String> {
+/// Turn the engine's dropped-packet events on or off. Notifications and both
+/// packets logs need them.
+pub fn set_event_collection(on: bool) -> Result<(), String> {
     if !is_admin() {
         return Err("Administrator rights are required to change the packets log.".into());
     }
@@ -881,132 +884,6 @@ unsafe fn set_collect(engine: HANDLE, on: bool) -> Result<(), String> {
         FwpmEngineSetOption0(engine, FWPM_ENGINE_COLLECT_NET_EVENTS, &uint32_value(on as u32)),
         "FwpmEngineSetOption0",
     )
-}
-
-/// One dropped connection from the engine's net event buffer.
-#[derive(Clone, Debug)]
-pub struct Packet {
-    pub time: u64,
-    pub app: String,
-    pub protocol: u8,
-    pub local: String,
-    pub remote: String,
-    pub inbound: bool,
-}
-
-/// Drops caused by this provider's filters, newest first.
-pub fn dropped_packets(limit: usize) -> Result<Vec<Packet>, String> {
-    if !is_admin() {
-        return Err("Administrator rights are required to read the packets log.".into());
-    }
-    let engine = Engine::open()?;
-    let mut out = Vec::new();
-    let mut ours: HashMap<u64, bool> = HashMap::new();
-    let mut inbound: HashMap<u16, bool> = HashMap::new();
-    unsafe {
-        let mut handle = HANDLE::default();
-        win(FwpmNetEventCreateEnumHandle0(engine.handle, None, &mut handle), "net event enum")?;
-        loop {
-            let mut entries = std::ptr::null_mut();
-            let mut returned = 0u32;
-            if FwpmNetEventEnum0(engine.handle, handle, 512, &mut entries, &mut returned) != 0
-                || returned == 0
-                || entries.is_null()
-            {
-                break;
-            }
-            for i in 0..returned as usize {
-                let event = *entries.add(i);
-                if event.is_null() || (*event).r#type != FWPM_NET_EVENT_TYPE_CLASSIFY_DROP {
-                    continue;
-                }
-                let drop = (*event).Anonymous.classifyDrop;
-                if drop.is_null() {
-                    continue;
-                }
-                let filter_id = (*drop).filterId;
-                let mine = *ours
-                    .entry(filter_id)
-                    .or_insert_with(|| filter_is_ours(engine.handle, filter_id));
-                if !mine {
-                    continue;
-                }
-                let layer = (*drop).layerId;
-                let is_inbound = *inbound
-                    .entry(layer)
-                    .or_insert_with(|| layer_is_inbound(engine.handle, layer));
-                out.push(packet(&(*event).header, is_inbound));
-            }
-            FwpmFreeMemory0(&mut entries as *mut _ as *mut *mut _);
-        }
-        let _ = FwpmNetEventDestroyEnumHandle0(engine.handle, handle);
-    }
-    out.sort_by(|a, b| b.time.cmp(&a.time));
-    out.truncate(limit);
-    Ok(out)
-}
-
-unsafe fn filter_is_ours(engine: HANDLE, id: u64) -> bool {
-    let mut filter = std::ptr::null_mut();
-    if FwpmFilterGetById0(engine, id, &mut filter) != 0 || filter.is_null() {
-        return false;
-    }
-    let provider = (*filter).providerKey;
-    let mine = !provider.is_null() && *provider == provider_guid();
-    FwpmFreeMemory0(&mut filter as *mut _ as *mut *mut _);
-    mine
-}
-
-unsafe fn layer_is_inbound(engine: HANDLE, id: u16) -> bool {
-    let mut layer = std::ptr::null_mut();
-    if FwpmLayerGetById0(engine, id, &mut layer) != 0 || layer.is_null() {
-        return false;
-    }
-    let key = (*layer).layerKey;
-    FwpmFreeMemory0(&mut layer as *mut _ as *mut *mut _);
-    key == FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4 || key == FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6
-}
-
-unsafe fn packet(header: &FWPM_NET_EVENT_HEADER0, inbound: bool) -> Packet {
-    let has = |flag: u32| header.flags & flag != 0;
-    let v6 = has(FWPM_NET_EVENT_FLAG_IP_VERSION_SET) && header.ipVersion == FWP_IP_VERSION_V6;
-    let endpoint = |addr: String, port: u16, port_set: bool| {
-        if port_set && port != 0 {
-            if v6 { format!("[{addr}]:{port}") } else { format!("{addr}:{port}") }
-        } else {
-            addr
-        }
-    };
-    let local = if !has(FWPM_NET_EVENT_FLAG_LOCAL_ADDR_SET) {
-        String::new()
-    } else if v6 {
-        Ipv6Addr::from(header.Anonymous1.localAddrV6.byteArray16).to_string()
-    } else {
-        Ipv4Addr::from(header.Anonymous1.localAddrV4).to_string()
-    };
-    let remote = if !has(FWPM_NET_EVENT_FLAG_REMOTE_ADDR_SET) {
-        String::new()
-    } else if v6 {
-        Ipv6Addr::from(header.Anonymous2.remoteAddrV6.byteArray16).to_string()
-    } else {
-        Ipv4Addr::from(header.Anonymous2.remoteAddrV4).to_string()
-    };
-    let app = if has(FWPM_NET_EVENT_FLAG_APP_ID_SET) && !header.appId.data.is_null() {
-        let wide = std::slice::from_raw_parts(header.appId.data as *const u16, header.appId.size as usize / 2);
-        let path = crate::apps::utf16_prefix(wide);
-        path.rsplit('\\').next().unwrap_or(&path).to_string()
-    } else {
-        SYSTEM_APP.to_string()
-    };
-    let stamp = (header.timeStamp.dwHighDateTime as u64) << 32 | header.timeStamp.dwLowDateTime as u64;
-    Packet {
-        time: stamp.saturating_sub(FILETIME_UNIX_EPOCH) / 10_000_000,
-        app,
-        protocol: if has(FWPM_NET_EVENT_FLAG_IP_PROTOCOL_SET) { header.ipProtocol } else { 0 },
-        local: endpoint(local, header.localPort, has(FWPM_NET_EVENT_FLAG_LOCAL_PORT_SET)),
-        remote: endpoint(remote, header.remotePort, has(FWPM_NET_EVENT_FLAG_REMOTE_PORT_SET)),
-        inbound,
-    }
 }
 
 #[cfg(test)]

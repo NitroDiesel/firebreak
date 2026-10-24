@@ -74,6 +74,17 @@ impl RuleDraft {
         }
     }
 
+    /// A rule for one blocked connection, from a notification.
+    pub fn for_connection(app: String, remote: String, protocol: u8, inbound: bool) -> Self {
+        let mut draft = Self::new(vec![app]);
+        draft.rule.remote = remote;
+        draft.rule.protocol = protocol;
+        if inbound {
+            draft.rule.direction = Direction::Inbound;
+        }
+        draft
+    }
+
     pub fn edit(index: usize, rule: &Rule) -> Self {
         Self {
             index: Some(index),
@@ -569,6 +580,14 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                     Page::Logging => {
                         section(ui, "Packets log");
                         saved |= ui.checkbox(&mut s.log_to_file, "Enable packets logging to a file").changed();
+                        ui.add_enabled_ui(s.log_to_file, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("Start the file over at");
+                                saved |= ui
+                                    .add(egui::DragValue::new(&mut s.log_size_limit_kb).range(0..=1_048_576).suffix(" KB"))
+                                    .changed();
+                            });
+                        });
                         saved |= ui
                             .checkbox(&mut s.log_ui, "Enable packets logging interface (session only)")
                             .changed();

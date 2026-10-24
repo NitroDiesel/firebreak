@@ -237,7 +237,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_CLOSE => {
-            let mut data = icon_data(hwnd);
+            let data = icon_data(hwnd);
             let _ = Shell_NotifyIconW(NIM_DELETE, &data);
             let _ = DestroyWindow(hwnd);
             LRESULT(0)

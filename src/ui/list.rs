@@ -75,7 +75,7 @@ pub struct FileIcons {
 }
 
 impl FileIcons {
-    fn get(&mut self, ctx: &egui::Context, path: &str, generic: bool, budget: &mut u32) -> Option<Option<TextureId>> {
+    pub fn get(&mut self, ctx: &egui::Context, path: &str, generic: bool, budget: &mut u32) -> Option<Option<TextureId>> {
         let key = if generic {
             path.rsplit('.').next().unwrap_or(path).to_ascii_lowercase()
         } else {

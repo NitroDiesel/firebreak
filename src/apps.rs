@@ -21,7 +21,8 @@ use windows::Win32::System::Services::{
     SC_MANAGER_ENUMERATE_SERVICE, SERVICE_QUERY_CONFIG, SERVICE_STATE_ALL, SERVICE_WIN32,
 };
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
 use windows::Win32::UI::Shell::SHLoadIndirectString;
 
@@ -125,6 +126,29 @@ pub fn process_names() -> BTreeMap<u32, String> {
         out.insert(pid, exe.to_string());
     });
     out
+}
+
+/// End every process running from `path`, like the notification's "Kill process"
+/// (`_app_notify_killprocess`). Returns how many were ended.
+pub fn kill_processes(path: &str) -> usize {
+    let mut pids = Vec::new();
+    walk_processes(|pid, _| {
+        if process_path(pid).is_some_and(|p| p.eq_ignore_ascii_case(path)) {
+            pids.push(pid);
+        }
+    });
+    pids.into_iter()
+        .filter(|pid| unsafe {
+            match OpenProcess(PROCESS_TERMINATE, false, *pid) {
+                Ok(handle) => {
+                    let ok = TerminateProcess(handle, 1).is_ok();
+                    let _ = CloseHandle(handle);
+                    ok
+                }
+                Err(_) => false,
+            }
+        })
+        .count()
 }
 
 fn walk_processes(mut visit: impl FnMut(u32, &str)) {

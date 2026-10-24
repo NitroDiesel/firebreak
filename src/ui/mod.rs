@@ -4,6 +4,7 @@
 
 mod dialogs;
 mod list;
+mod notify;
 mod shell;
 mod theme;
 mod view;
@@ -19,9 +20,10 @@ use eframe::egui::{
 
 use crate::apps;
 use crate::log::{self, Endpoint};
-use crate::model::{now_unix, AppItem, AppKind, BlocklistGroup, BlocklistState, Profile, RuleOrigin};
+use crate::model::{now_unix, protocol_label, AppItem, AppKind, BlocklistGroup, BlocklistState, Profile, RuleOrigin};
 use crate::profile;
-use crate::wfp::{self, Packet};
+use crate::netevents::{self, Packet};
+use crate::wfp;
 
 use dialogs::{Ask, Dialog, Effect, RuleDraft, TIMERS};
 use list::{FileIcons, Line, List, Sort};
@@ -161,6 +163,19 @@ pub struct SimplewallApp {
     start_minimized: bool,
     /// Task Scheduler state, read when Settings first opens.
     startup: Option<dialogs::Startup>,
+    /// Running elevated; needed for event subscriptions.
+    admin: bool,
+    /// Live dropped-connection events, while notifications or a log need them.
+    events: Option<netevents::Subscription>,
+    events_tx: Sender<Packet>,
+    events_rx: Receiver<Packet>,
+    /// Subscribing failed; do not retry every frame.
+    events_failed: bool,
+    /// Last event-collection state set on the engine.
+    collecting: Option<bool>,
+    /// Pending notifications, one per app.
+    alerts: Vec<Packet>,
+    alert_index: usize,
 }
 
 impl SimplewallApp {
@@ -177,6 +192,7 @@ impl SimplewallApp {
         let sort = Sort { column: 0, descending: false };
         let start_minimized = minimized || profile.settings.start_minimized;
         let (tray_tx, tray_rx) = channel();
+        let (events_tx, events_rx) = channel();
         let tray_state = tray_state_of(&profile, filters_on, false);
         let tray = Tray::spawn(ctx.clone(), tray_tx, tray_state.clone());
         if let (Some(tray), Some(hwnd)) = (&tray, main_hwnd(cc)) {
@@ -213,6 +229,14 @@ impl SimplewallApp {
             in_tray: false,
             start_minimized,
             startup: None,
+            admin: wfp::is_admin(),
+            events: None,
+            events_tx,
+            events_rx,
+            events_failed: false,
+            collecting: None,
+            alerts: Vec::new(),
+            alert_index: 0,
         };
         // Packets log sorts newest first, as in the C build.
         app.sorts[Tab::Packets.index()] = Sort { column: 1, descending: true };
@@ -278,10 +302,6 @@ impl SimplewallApp {
                             }
                             if msg.contains("Skipped") {
                                 self.notify(msg.clone(), true);
-                            }
-                            if self.profile.settings.log_to_file {
-                                let verb = if enabled { "install" } else { "uninstall" };
-                                log::append_file(&log::log_path(), &format!("{}\t{verb}\t{msg}", now_unix()));
                             }
                         }
                         Err(err) => {
@@ -370,7 +390,7 @@ impl SimplewallApp {
         self.packets_state = Some("Loading\u{2026}".into());
         let tx = self.worker.reply_tx.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(Reply::Packets(wfp::dropped_packets(2000)));
+            let _ = tx.send(Reply::Packets(crate::netevents::history(2000)));
         });
     }
 
@@ -440,6 +460,217 @@ impl SimplewallApp {
         }
         self.closing = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    /// Subscribe to drop events while notifications or a packets log want them,
+    /// and keep the engine collecting them (`_wfp_logsubscribe`).
+    fn sync_events(&mut self, ctx: &egui::Context) {
+        if !self.admin {
+            return;
+        }
+        let s = &self.profile.settings;
+        let want = s.notifications || s.log_ui || s.log_to_file;
+        if self.collecting != Some(want) {
+            let _ = wfp::set_event_collection(want);
+            self.collecting = Some(want);
+        }
+        if !want {
+            self.events = None;
+            self.events_failed = false;
+            return;
+        }
+        if self.events.is_some() || self.events_failed {
+            return;
+        }
+        let tx = self.events_tx.clone();
+        let waker = ctx.clone();
+        match netevents::subscribe(move |packet| {
+            if tx.send(packet).is_ok() {
+                waker.request_repaint();
+            }
+        }) {
+            Ok(subscription) => self.events = Some(subscription),
+            Err(err) => {
+                self.events_failed = true;
+                self.notify(err, true);
+            }
+        }
+    }
+
+    /// Handle new drop events, like `_app_logthread`: collect unknown apps, fill
+    /// the packets logs, and queue notifications for apps that are not allowed.
+    fn drain_events(&mut self) {
+        let packets: Vec<Packet> = self.events_rx.try_iter().take(5000).collect();
+        if packets.is_empty() {
+            return;
+        }
+        let now = now_unix();
+        let mut added = false;
+        let mut live = false;
+        for packet in packets {
+            let s = &self.profile.settings;
+            if s.log_to_file {
+                self.write_log(&packet);
+            }
+            if !packet.ours {
+                continue;
+            }
+            let index = match self.app_index(&packet) {
+                Some(index) => index,
+                None if packet.kind == AppKind::System => continue,
+                None => {
+                    self.profile.apps.push(app_from_packet(&packet));
+                    added = true;
+                    self.profile.apps.len() - 1
+                }
+            };
+            let s = &self.profile.settings;
+            if s.log_ui && packet.time > self.packets_cleared_at {
+                self.packets.insert(0, packet.clone());
+                self.packets.truncate(5000);
+                live = true;
+            }
+            let (notify, timeout) = (s.notifications, s.notifications_timeout);
+            let app = &mut self.profile.apps[index];
+            if notify && packet.default_block && !app.silent && !app.enabled {
+                if timeout == 0 || now.saturating_sub(app.last_notify) >= timeout {
+                    app.last_notify = now;
+                    self.push_alert(packet);
+                }
+            }
+        }
+        if added {
+            self.save();
+            self.dirty = true;
+        }
+        if live && self.tab == Tab::Packets {
+            self.dirty = true;
+        }
+    }
+
+    fn app_index(&self, packet: &Packet) -> Option<usize> {
+        // Events name a file, a package SID, or System; never a service name.
+        self.profile
+            .apps
+            .iter()
+            .position(|app| app.kind != AppKind::Service && app.path.eq_ignore_ascii_case(&packet.path))
+    }
+
+    fn push_alert(&mut self, packet: Packet) {
+        self.alerts.retain(|a| !a.path.eq_ignore_ascii_case(&packet.path));
+        self.alerts.push(packet);
+        let s = &self.profile.settings;
+        if s.notifications_sound && !(s.notifications_fullscreen_silent && shell::fullscreen_app_in_front()) {
+            shell::play_alert_sound();
+        }
+    }
+
+    /// One CSV line per dropped connection, in the C build's column order
+    /// (SZ_LOG_TITLE). The file starts over at the size limit.
+    fn write_log(&self, packet: &Packet) {
+        let path = log::log_path();
+        let limit = self.profile.settings.log_size_limit_kb * 1024;
+        if limit > 0 && std::fs::metadata(&path).is_ok_and(|m| m.len() >= limit) {
+            let _ = std::fs::remove_file(&path);
+        }
+        if !path.exists() {
+            log::append_file(
+                &path,
+                "Date,Username,Path,Address (Local),Port (Local),Address (Remote),Port (Remote),Protocol,Layer,Filter name,Filter ID,Direction,State",
+            );
+        }
+        let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+        let port = |p: u16| if p == 0 { String::new() } else { p.to_string() };
+        let fields = [
+            quote(&shell::format_time(packet.time)),
+            quote(""),
+            quote(&packet.path),
+            quote(&packet.local_addr),
+            quote(&port(packet.local_port)),
+            quote(&packet.remote_addr),
+            quote(&port(packet.remote_port)),
+            quote(protocol_label(packet.protocol)),
+            quote(if packet.inbound { "ALE receive/accept" } else { "ALE connect" }),
+            quote(&packet.filter),
+            quote(&format!("#{}", packet.filter_id)),
+            quote(packet.direction()),
+            quote("Blocked"),
+        ];
+        log::append_file(&path, &fields.join(","));
+    }
+
+    /// The notification window for the current alert.
+    fn alerts_ui(&mut self, ctx: &egui::Context) {
+        if self.alerts.is_empty() {
+            return;
+        }
+        self.alert_index = self.alert_index.min(self.alerts.len() - 1);
+        let packet = self.alerts[self.alert_index].clone();
+        let Some(index) = self.app_index(&packet) else {
+            self.alerts.remove(self.alert_index);
+            return;
+        };
+        let app = self.profile.apps[index].clone();
+        if app.enabled || app.silent {
+            self.alerts.remove(self.alert_index);
+            return;
+        }
+        let alert = notify::Alert {
+            packet: &packet,
+            app: &app,
+            position: self.alert_index,
+            count: self.alerts.len(),
+            accent: self.accent,
+        };
+        let files = &mut self.files;
+        let action = ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("simplewall-alert"),
+            notify::builder(ctx),
+            |ctx, _| notify::show(ctx, &alert, files),
+        );
+        let done = |alerts: &mut Vec<Packet>| alerts.retain(|a| !a.path.eq_ignore_ascii_case(&packet.path));
+        match action {
+            notify::Action::None => {}
+            notify::Action::Allow(seconds) => {
+                let item = &mut self.profile.apps[index];
+                item.enabled = true;
+                item.silent = false;
+                item.timer_until = seconds.map_or(0, |s| now_unix() + s);
+                done(&mut self.alerts);
+                self.changed();
+            }
+            notify::Action::Block => {
+                let item = &mut self.profile.apps[index];
+                item.enabled = false;
+                item.silent = true;
+                done(&mut self.alerts);
+                self.save();
+                self.dirty = true;
+            }
+            notify::Action::Silence => {
+                self.profile.apps[index].silent = true;
+                done(&mut self.alerts);
+                self.save();
+            }
+            notify::Action::CreateRule => {
+                done(&mut self.alerts);
+                self.show_window();
+                self.dialog = Some(Dialog::Rule(RuleDraft::for_connection(
+                    app.path.clone(),
+                    packet.remote_addr.clone(),
+                    packet.protocol,
+                    packet.inbound,
+                )));
+            }
+            notify::Action::Reveal => shell::reveal(&app.path),
+            notify::Action::Kill => {
+                let killed = apps::kill_processes(&app.path);
+                self.notify(format!("Ended {killed} process(es) of {}.", app.display_name), false);
+                done(&mut self.alerts);
+            }
+            notify::Action::Next => self.alert_index = (self.alert_index + 1) % self.alerts.len(),
+            notify::Action::Dismiss => done(&mut self.alerts),
+        }
     }
 
     /// Keep the tray icon and menu checkmarks in step with the window.
@@ -644,7 +875,7 @@ impl SimplewallApp {
             Tab::Packets => self
                 .packets
                 .get(id)
-                .map(|p| format!("{}\t{}\t{}", p.app, p.local, p.remote)),
+                .map(|p| format!("{}\t{}\t{}", p.path, p.local(), p.remote())),
         }
     }
 
@@ -967,7 +1198,7 @@ impl SimplewallApp {
     fn set_log_ui(&mut self, on: bool) {
         self.profile.settings.log_ui = on;
         self.save();
-        if let Err(err) = wfp::set_packet_log(on) {
+        if let Err(err) = wfp::set_event_collection(on) {
             self.notify(err, true);
         }
         if self.tab == Tab::Packets {
@@ -1434,6 +1665,8 @@ impl eframe::App for SimplewallApp {
         self.tick_timers(ctx);
         self.handle_tray(ctx);
         self.sync_tray(ctx);
+        self.sync_events(ctx);
+        self.drain_events();
         self.guard_close(ctx);
         self.shortcuts(ctx);
         if self.dirty {
@@ -1448,6 +1681,7 @@ impl eframe::App for SimplewallApp {
         self.status_bar(ctx);
         self.list(ctx);
         self.dialogs(ctx);
+        self.alerts_ui(ctx);
         if self.dirty {
             ctx.request_repaint();
         }
@@ -1512,4 +1746,27 @@ fn tray_state_of(profile: &Profile, filters_on: bool, busy: bool) -> TrayState {
         log_file: s.log_to_file,
         log_ui: s.log_ui,
     }
+}
+
+/// A new list entry for an app seen in a drop event ("apps collector" in `_app_logthread`).
+fn app_from_packet(packet: &Packet) -> AppItem {
+    let path = match packet.kind {
+        // Event paths are lowercase; use the name as it is on disk.
+        AppKind::Regular => std::fs::canonicalize(&packet.path)
+            .ok()
+            .map(|p| {
+                let text = p.to_string_lossy().into_owned();
+                match text.strip_prefix(r"\\?\UNC\") {
+                    Some(rest) => format!(r"\\{rest}"),
+                    None => text.trim_start_matches(r"\\?\").to_string(),
+                }
+            })
+            .unwrap_or_else(|| packet.path.clone()),
+        _ => packet.path.clone(),
+    };
+    let name = match packet.kind {
+        AppKind::Regular => path.rsplit('\\').next().unwrap_or(&path).to_string(),
+        _ => path.clone(),
+    };
+    AppItem::new(path, name, packet.kind)
 }

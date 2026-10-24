@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use crate::log::Endpoint;
 use crate::model::{protocol_label, query_matches, AppItem, AppKind, Profile, Rule, RuleAction, RuleOrigin};
-use crate::wfp::Packet;
+use crate::netevents::Packet;
 
 use super::list::{Column, Icon, Line, Row, Sort};
 use super::shell;
@@ -423,17 +423,17 @@ fn packets(src: &Source) -> Vec<Entry> {
     src.packets
         .iter()
         .enumerate()
-        .filter(|(_, p)| query_matches(src.query, false, &[&p.app, &p.local, &p.remote]))
+        .filter(|(_, p)| query_matches(src.query, false, &[&p.path, &p.local(), &p.remote()]))
         .map(|(id, p)| {
             let row = Row {
                 id,
                 cells: vec![
-                    p.app.clone(),
+                    p.name().to_string(),
                     shell::format_time(p.time),
-                    p.local.clone(),
-                    p.remote.clone(),
+                    p.local(),
+                    p.remote(),
                     protocol_label(p.protocol).to_string(),
-                    if p.inbound { "Inbound" } else { "Outbound" }.to_string(),
+                    p.direction().to_string(),
                 ],
                 check: None,
                 icon: Icon::Block,

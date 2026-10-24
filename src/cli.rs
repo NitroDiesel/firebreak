@@ -1,8 +1,6 @@
 //! Command line, same verbs as the C build:
 //! `-install`, `-install -temp`, `-install -silent`, `-uninstall`, `-help`.
 
-use crate::log::{self, log_path};
-use crate::model::now_unix;
 use crate::profile;
 use crate::wfp;
 
@@ -28,14 +26,7 @@ pub fn run(args: &[String]) -> i32 {
             let _ = profile::save(&profile);
         }
         profile.settings.filters_temporary = temp;
-        let result = wfp::install(&profile, temp);
-        if result.is_ok() && profile.settings.log_to_file {
-            log::append_file(
-                &log_path(),
-                &format!("{}\tinstall\ttemp={temp}", now_unix()),
-            );
-        }
-        return finish(result);
+        return finish(wfp::install(&profile, temp));
     }
     if joined.contains("-status") {
         return match wfp::filters_installed() {
