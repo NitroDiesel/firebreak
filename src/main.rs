@@ -16,6 +16,7 @@ mod security;
 mod swc;
 mod tray;
 mod ui;
+mod update;
 mod wfp;
 
 use windows::core::PCWSTR;

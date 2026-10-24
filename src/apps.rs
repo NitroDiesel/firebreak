@@ -173,7 +173,8 @@ fn walk_processes(mut visit: impl FnMut(u32, &str)) {
     }
 }
 
-fn processes() -> Vec<AppItem> {
+/// Running programs, for the app monitor.
+pub fn processes() -> Vec<AppItem> {
     let mut out = Vec::new();
     walk_processes(|pid, exe| {
         if let Some(path) = process_path(pid) {

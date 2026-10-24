@@ -48,6 +48,8 @@ enum Job {
 enum Reply {
     Filters { seq: u64, enabled: bool, result: Result<String, String> },
     Packets(Result<Vec<Packet>, String>),
+    /// A newer version, or none; `manual` when asked from the Help menu.
+    Update { result: Result<Option<String>, String>, manual: bool },
 }
 
 /// One thread applies filters. Queued jobs collapse to the newest, since each
@@ -190,6 +192,10 @@ pub struct SimplewallApp {
     events_failed: bool,
     /// Last event-collection state set on the engine.
     collecting: Option<bool>,
+    /// A newer release found by the update check.
+    update_available: Option<String>,
+    /// Last app monitor scan.
+    last_app_scan: Instant,
     /// Pending notifications, one per app.
     alerts: Vec<Packet>,
     alert_index: usize,
@@ -282,6 +288,8 @@ impl SimplewallApp {
             events_rx,
             events_failed: false,
             collecting: None,
+            update_available: None,
+            last_app_scan: Instant::now(),
             alerts: Vec::new(),
             alert_index: 0,
         };
@@ -301,6 +309,7 @@ impl SimplewallApp {
         if app.tab == Tab::Packets {
             app.load_packets();
         }
+        app.check_for_updates(false);
         app.save();
         if let Some(text) = first_notice {
             app.notify(text, false);
@@ -374,6 +383,15 @@ impl SimplewallApp {
                         }
                     }
                 }
+                Reply::Update { result, manual } => match result {
+                    Ok(Some(version)) => {
+                        self.notify(format!("simplewall {version} is available: Help > Download update."), false);
+                        self.update_available = Some(version);
+                    }
+                    Ok(None) if manual => self.notify("You have the latest version.", false),
+                    Err(err) if manual => self.notify(err, true),
+                    _ => {}
+                },
                 Reply::Packets(result) => {
                     match result {
                         Ok(packets) => {
@@ -816,6 +834,47 @@ impl SimplewallApp {
             self.changed();
         } else if save {
             self.save();
+        }
+    }
+
+    /// Ask GitHub for a newer release on a background thread. Automatic checks
+    /// run at most once a day.
+    fn check_for_updates(&mut self, manual: bool) {
+        let now = now_unix();
+        let s = &mut self.profile.settings;
+        if !manual && (!s.check_updates || now.saturating_sub(s.last_update_check) < 24 * 60 * 60) {
+            return;
+        }
+        s.last_update_check = now;
+        self.save();
+        let tx = self.worker.reply_tx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(Reply::Update { result: crate::update::newer_version(), manual });
+        });
+    }
+
+    /// IsEnableAppMonitor: add programs to the list as they start, every 5 seconds.
+    fn scan_new_apps(&mut self, ctx: &egui::Context) {
+        if !self.profile.settings.app_monitor {
+            return;
+        }
+        const PERIOD: Duration = Duration::from_secs(5);
+        ctx.request_repaint_after(PERIOD.saturating_sub(self.last_app_scan.elapsed()));
+        if self.last_app_scan.elapsed() < PERIOD {
+            return;
+        }
+        self.last_app_scan = Instant::now();
+        let known: HashSet<String> = self.profile.apps.iter().map(|a| a.path.to_lowercase()).collect();
+        let mut added = false;
+        for app in apps::processes() {
+            if !known.contains(&app.path.to_lowercase()) {
+                self.profile.apps.push(app);
+                added = true;
+            }
+        }
+        if added {
+            self.save();
+            self.dirty = true;
         }
     }
 
@@ -1356,6 +1415,16 @@ impl SimplewallApp {
                         if ui.button("Website").clicked() {
                             ui.close_menu();
                             shell::open("https://github.com/NitroDiesel/simplewall");
+                        }
+                        if ui.button("Check for updates").clicked() {
+                            ui.close_menu();
+                            self.check_for_updates(true);
+                        }
+                        if let Some(version) = &self.update_available {
+                            if ui.button(format!("Download update ({version})")).clicked() {
+                                ui.close_menu();
+                                shell::open(crate::update::RELEASES_URL);
+                            }
                         }
                         if ui.add(egui::Button::new("About").shortcut_text("F1")).clicked() {
                             ui.close_menu();
@@ -1929,6 +1998,7 @@ impl eframe::App for SimplewallApp {
         self.check_file_hashes(ctx);
         self.sync_connections();
         self.sync_appearance(ctx);
+        self.scan_new_apps(ctx);
         self.guard_close(ctx);
         self.shortcuts(ctx);
         if self.dirty {

@@ -543,6 +543,11 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                             }
                         }
                         hint(ui, "Both use Task Scheduler with highest privileges, so no UAC prompt appears.");
+                        section(ui, "Apps");
+                        saved |= ui
+                            .checkbox(&mut s.app_monitor, "Add programs to the list as they start")
+                            .changed();
+                        saved |= ui.checkbox(&mut s.check_updates, "Check for updates once a day").changed();
                         section(ui, "Window");
                         saved |= ui.checkbox(&mut s.always_on_top, "Always on top").changed();
                         saved |= ui.checkbox(&mut s.show_filenames_only, "Show filenames only").changed();

@@ -338,6 +338,12 @@ settings! {
     show_wait_connections: bool = true,
     /// IsNetworkResolutionsEnabled: look up host names for remote addresses.
     resolve_hostnames: bool = true,
+    /// Check GitHub for a newer release once a day.
+    check_updates: bool = true,
+    /// Unix seconds of the last update check.
+    last_update_check: u64 = 0,
+    /// IsEnableAppMonitor: add programs to the list as they start.
+    app_monitor: bool = false,
     /// IsStartMinimized: start in the tray.
     start_minimized: bool = false,
     /// ConfirmExit2: ask before exiting while filters are on.
