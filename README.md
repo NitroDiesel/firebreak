@@ -62,7 +62,7 @@ The layout follows the original: a menu bar (File, Edit, View, Settings, Blockli
   | Del | Delete |
   | Ctrl+C | Copy |
   | Ctrl+E | Open file location |
-  | Ctrl+Shift+X | Purge unused apps |
+  | Ctrl+Shift+X | Purge unused apps (asks first) |
   | Ctrl+Shift+T | Purge timers |
 - Search matches a substring. Start it with `re:` to search with a regular expression.
 - The accent color follows the Windows accent color. The font is Segoe UI.
@@ -82,7 +82,8 @@ Checked apps are permitted. A lowest-weight block filter drops every other ALE c
   - Microsoft update. Default: Disable.
   - Microsoft applications. Default: Disable.
 - "Until reboot" filters are not persistent. They stay installed until Windows restarts.
-- Timers allow an app until the time runs out, then block it again.
+- Timers allow an app until the time runs out, then block it again. Turning a timer off also blocks the app. Timers only count down while the window is open, so closing simplewall with filters on and timers running asks to end them first.
+- Per-user service instances (such as `CDPUserSvc_1a2b3`) get a new name at every sign-in, so they are not listed. Allow `svchost.exe` to cover them.
 - The Packets log reads dropped connections from the WFP net event buffer. It lists only drops caused by simplewall's own filters.
 
 User and custom allow rules sit above the blocklist. To let a blocklist entry win, turn off "User rules take priority over the blocklist". "Allow local network (LAN)" permits private, link-local, and multicast ranges.

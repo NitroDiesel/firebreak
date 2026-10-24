@@ -27,7 +27,7 @@ pub enum Dialog {
     App(usize),
     Settings,
     About,
-    Confirm(bool),
+    Confirm(Ask),
 }
 
 /// What the open dialog asks the window to do this frame.
@@ -37,7 +37,8 @@ pub enum Effect {
     /// The profile was edited in place.
     Changed,
     SaveRule(Box<Rule>, Option<usize>),
-    SetFilters(bool, bool),
+    /// The confirmation was accepted; the flag is "until reboot" for filtering.
+    Accept(Ask, bool),
 }
 
 pub struct RuleDraft {
@@ -349,6 +350,10 @@ pub fn app_properties(ctx: &egui::Context, index: usize, profile: &mut Profile) 
             };
             egui::ComboBox::from_id_salt("timer").selected_text(current).width(200.0).show_ui(ui, |ui| {
                 if ui.selectable_label(!item.has_timer(), "Off").clicked() {
+                    // Ending a running timer blocks the app again (henrypp/simplewall#2159).
+                    if item.has_timer() {
+                        item.enabled = false;
+                    }
                     item.timer_until = 0;
                     effect = Effect::Changed;
                 }
@@ -507,34 +512,62 @@ pub fn about(ctx: &egui::Context, logo: &egui::TextureHandle) -> Effect {
     effect
 }
 
-/// The same questions the C build asks before it changes filtering.
-pub fn confirm(ctx: &egui::Context, enable: bool, accent: Color32) -> Effect {
+/// A question asked before something hard to undo.
+#[derive(Clone, Copy)]
+pub enum Ask {
+    /// Enable (true) or disable filtering, with the C build's wording.
+    Filters(bool),
+    /// Purge this many unused apps (henrypp/simplewall#2109: say what it does).
+    PurgeUnused(usize),
+    ClearLog,
+    /// Close while this many app timers are still running.
+    CloseWithTimers(usize),
+}
+
+pub fn confirm(ctx: &egui::Context, ask: Ask, accent: Color32) -> Effect {
     let mut effect = Effect::None;
-    let modal = egui::Modal::new(egui::Id::new("confirm_filters")).show(ctx, |ui| {
+    let (title, body, action) = match ask {
+        Ask::Filters(true) => (
+            "Enable filtering?".to_string(),
+            "This will deny network access to apps as defined by the current configuration. Continue?".to_string(),
+            "Enable",
+        ),
+        Ask::Filters(false) => (
+            "Disable filtering?".to_string(),
+            "This will restore network access for all apps that are currently blocked. Continue?".to_string(),
+            "Disable",
+        ),
+        Ask::PurgeUnused(count) => (
+            format!("Remove {count} unused apps?"),
+            "This removes apps that are missing from disk, and apps that are not allowed, pinned, or used by any rule. Running apps come back on the next refresh.".to_string(),
+            "Remove",
+        ),
+        Ask::ClearLog => (
+            "Clear the log?".to_string(),
+            "This deletes simplewall.csv and empties the Packets log.".to_string(),
+            "Clear",
+        ),
+        Ask::CloseWithTimers(count) => (
+            "End running timers?".to_string(),
+            format!(
+                "Timers only run while simplewall is open. Closing now blocks the {count} app(s) that have a timer, so they do not keep network access."
+            ),
+            "End timers and close",
+        ),
+    };
+    let modal = egui::Modal::new(egui::Id::new("confirm")).show(ctx, |ui| {
         ui.set_width(420.0);
-        let (title, body) = if enable {
-            (
-                "Enable filtering?",
-                "This will deny network access to apps as defined by the current configuration. Continue?",
-            )
-        } else {
-            (
-                "Disable filtering?",
-                "This will restore network access for all apps that are currently blocked. Continue?",
-            )
-        };
         ui.label(RichText::new(title).font(theme::semibold(16.0)));
         ui.add_space(6.0);
         ui.label(body);
         ui.add_space(14.0);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let label = if enable { "Enable" } else { "Disable" };
-            let primary = egui::Button::new(RichText::new(label).color(theme::text_on(accent))).fill(accent);
+            let primary = egui::Button::new(RichText::new(action).color(theme::text_on(accent))).fill(accent);
             if ui.add(primary).clicked() {
-                effect = Effect::SetFilters(enable, false);
+                effect = Effect::Accept(ask, false);
             }
-            if enable && ui.button("Until reboot").clicked() {
-                effect = Effect::SetFilters(true, true);
+            if matches!(ask, Ask::Filters(true)) && ui.button("Until reboot").clicked() {
+                effect = Effect::Accept(ask, true);
             }
             if ui.button("Cancel").clicked() {
                 effect = Effect::Close;

@@ -23,7 +23,7 @@ use crate::model::{now_unix, AppItem, AppKind, BlocklistGroup, BlocklistState, P
 use crate::profile;
 use crate::wfp::{self, Packet};
 
-use dialogs::{Dialog, Effect, RuleDraft, TIMERS};
+use dialogs::{Ask, Dialog, Effect, RuleDraft, TIMERS};
 use list::{FileIcons, Line, List, Sort};
 use theme::Icons;
 use view::Tab;
@@ -146,6 +146,8 @@ pub struct SimplewallApp {
     notice: Option<Notice>,
     dialog: Option<Dialog>,
     underline: Option<Underline>,
+    /// Set once the close confirmation was accepted.
+    closing: bool,
 }
 
 impl SimplewallApp {
@@ -184,6 +186,7 @@ impl SimplewallApp {
             notice: None,
             dialog: None,
             underline: None,
+            closing: false,
         };
         // Packets log sorts newest first, as in the C build.
         app.sorts[Tab::Packets.index()] = Sort { column: 1, descending: true };
@@ -378,6 +381,53 @@ impl SimplewallApp {
         self.scroll_to = self.line_of(index);
     }
 
+    fn ask_purge_unused(&mut self) {
+        let count = self.profile.apps.iter().filter(|a| self.profile.app_is_unused(a)).count();
+        if count == 0 {
+            self.notify("There are no unused apps.", false);
+        } else {
+            self.dialog = Some(Dialog::Confirm(Ask::PurgeUnused(count)));
+        }
+    }
+
+    fn clear_log(&mut self) {
+        let _ = std::fs::remove_file(log::log_path());
+        self.packets_cleared_at = now_unix();
+        self.packets.clear();
+        self.dirty = true;
+        self.notify("Log cleared.", false);
+    }
+
+    /// Timers only count down while the window is open, so closing ends them
+    /// instead of leaving the apps allowed with nothing to block them later.
+    fn end_timers_and_close(&mut self, ctx: &egui::Context) {
+        for app in self.profile.apps.iter_mut().filter(|a| a.has_timer()) {
+            app.timer_until = 0;
+            app.enabled = false;
+        }
+        self.save();
+        if self.filters_on {
+            if let Err(err) = wfp::install(&self.profile, self.profile.settings.filters_temporary) {
+                self.notify(err, true);
+                return;
+            }
+        }
+        self.closing = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    /// Ask before closing while timers still hold apps open.
+    fn guard_close(&mut self, ctx: &egui::Context) {
+        if self.closing || !ctx.input(|i| i.viewport().close_requested()) {
+            return;
+        }
+        let timers = self.profile.apps.iter().filter(|a| a.has_timer()).count();
+        if self.filters_on && timers > 0 {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.dialog = Some(Dialog::Confirm(Ask::CloseWithTimers(timers)));
+        }
+    }
+
     fn purge_unused(&mut self) {
         let before = self.profile.apps.len();
         let keep: Vec<bool> = self.profile.apps.iter().map(|a| !self.profile.app_is_unused(a)).collect();
@@ -514,7 +564,9 @@ impl SimplewallApp {
             if i.consume_key(Modifiers::CTRL, Key::Tab) {
                 actions.push(Action::NextTab);
             }
-            if i.consume_key(ctrl_shift, Key::X) {
+            // egui reports Ctrl+X, with or without Shift, as a Cut event, not a key press.
+            let cut = i.events.iter().any(|e| matches!(e, Event::Cut));
+            if i.consume_key(ctrl_shift, Key::X) || (cut && i.modifiers.shift && !typing) {
                 actions.push(Action::PurgeUnused);
             }
             if i.consume_key(ctrl_shift, Key::T) {
@@ -571,7 +623,7 @@ impl SimplewallApp {
                     let step = if matches!(action, Action::NextTab) { 1 } else { Tab::ALL.len() - 1 };
                     self.switch_tab(Tab::ALL[(self.tab.index() + step) % Tab::ALL.len()]);
                 }
-                Action::PurgeUnused => self.purge_unused(),
+                Action::PurgeUnused => self.ask_purge_unused(),
                 Action::PurgeTimers => self.purge_timers(),
                 Action::Delete => selected.into_iter().for_each(|id| self.delete(id)),
                 Action::Open => selected.into_iter().for_each(|id| self.open(id)),
@@ -644,7 +696,7 @@ impl SimplewallApp {
                         ui.separator();
                         if ui.add(egui::Button::new("Purge unused apps").shortcut_text("Ctrl+Shift+X")).clicked() {
                             ui.close_menu();
-                            self.purge_unused();
+                            self.ask_purge_unused();
                         }
                         if ui.add(egui::Button::new("Purge timers").shortcut_text("Ctrl+Shift+T")).clicked() {
                             ui.close_menu();
@@ -731,7 +783,7 @@ impl SimplewallApp {
                     };
                     let icon = icon.clone();
                     if tool_button(ui, &icon, Some(label), "Enable or disable filtering", false, accent).clicked() {
-                        self.dialog = Some(Dialog::Confirm(!self.filters_on));
+                        self.dialog = Some(Dialog::Confirm(Ask::Filters(!self.filters_on)));
                     }
                     tool_separator(ui);
                     let plus = self.icons.plus.clone();
@@ -772,11 +824,7 @@ impl SimplewallApp {
                     }
                     let clear = self.icons.log_clear.clone();
                     if tool_button(ui, &clear, None, "Clear log", false, accent).clicked() {
-                        let _ = std::fs::remove_file(log::log_path());
-                        self.packets_cleared_at = now_unix();
-                        self.packets.clear();
-                        self.dirty = true;
-                        self.notify("Log cleared.", false);
+                        self.dialog = Some(Dialog::Confirm(Ask::ClearLog));
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1089,8 +1137,11 @@ impl SimplewallApp {
                     ui.separator();
                     if ui.button("Disable timer").clicked() {
                         ui.close_menu();
+                        // Ending a timer blocks the app again, as `_app_timer_reset` does
+                        // (henrypp/simplewall#2159).
                         if let Some(app) = self.profile.apps.get_mut(id) {
                             app.timer_until = 0;
+                            app.enabled = false;
                         }
                         self.changed();
                     }
@@ -1186,7 +1237,7 @@ impl SimplewallApp {
                 effect
             }
             Dialog::About => dialogs::about(ctx, &self.icons.logo),
-            Dialog::Confirm(enable) => dialogs::confirm(ctx, *enable, self.accent),
+            Dialog::Confirm(ask) => dialogs::confirm(ctx, *ask, self.accent),
         };
         let keep = match effect {
             Effect::None => true,
@@ -1208,8 +1259,13 @@ impl SimplewallApp {
                 self.changed();
                 false
             }
-            Effect::SetFilters(enable, temporary) => {
-                self.set_filters(enable, temporary);
+            Effect::Accept(ask, temporary) => {
+                match ask {
+                    Ask::Filters(enable) => self.set_filters(enable, temporary),
+                    Ask::PurgeUnused(_) => self.purge_unused(),
+                    Ask::ClearLog => self.clear_log(),
+                    Ask::CloseWithTimers(_) => self.end_timers_and_close(ctx),
+                }
                 false
             }
         };
@@ -1226,6 +1282,7 @@ impl eframe::App for SimplewallApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_worker();
         self.tick_timers(ctx);
+        self.guard_close(ctx);
         self.shortcuts(ctx);
         if self.dirty {
             self.rebuild();

@@ -27,6 +27,10 @@ use windows::Win32::UI::Shell::SHLoadIndirectString;
 
 use crate::model::{AppItem, AppKind, SYSTEM_APP};
 
+/// Per-user service instances (`CDPUserSvc_1a2b3`) get a new name at every
+/// logon, so listing them only piles up stale entries (henrypp/simplewall#2123).
+const SERVICE_USERSERVICE_INSTANCE: u32 = 0x80;
+
 const MAPPINGS: &str =
     r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppContainer\Mappings";
 
@@ -47,10 +51,18 @@ pub fn enumerate() -> Vec<AppItem> {
 }
 
 /// Keep saved allow/timer/comment when an app is still present, and keep saved
-/// apps that are not running so rules survive a reboot.
+/// apps that are not running so rules survive a reboot. A saved service that is
+/// gone and was never configured is dropped, which also clears out old per-user
+/// service instances.
 pub fn merge(saved: &[AppItem], live: Vec<AppItem>) -> Vec<AppItem> {
     let mut map: BTreeMap<String, AppItem> = BTreeMap::new();
+    let live_services: std::collections::HashSet<String> =
+        live.iter().filter(|a| a.kind == AppKind::Service).map(key).collect();
     for app in saved {
+        let untouched = !app.enabled && !app.pinned && !app.has_timer() && app.comment.is_empty();
+        if app.kind == AppKind::Service && untouched && !live_services.is_empty() && !live_services.contains(&key(app)) {
+            continue;
+        }
         map.insert(key(app), app.clone());
     }
     for app in live {
@@ -208,6 +220,9 @@ fn services() -> Vec<AppItem> {
                     count as usize,
                 );
                 for entry in entries {
+                    if entry.ServiceStatusProcess.dwServiceType.0 & SERVICE_USERSERVICE_INSTANCE != 0 {
+                        continue;
+                    }
                     let name = pwstr_to_string(entry.lpServiceName);
                     let display = pwstr_to_string(entry.lpDisplayName);
                     if !name.is_empty() {
@@ -372,5 +387,16 @@ mod tests {
         assert_eq!(merged.len(), 1);
         assert!(merged[0].enabled);
         assert_eq!(merged[0].added, 5);
+    }
+
+    #[test]
+    fn merge_drops_gone_services_nobody_configured() {
+        let stale = AppItem::new("CDPUserSvc_580ac".into(), "CDP".into(), AppKind::Service);
+        let mut allowed = AppItem::new("OldSvc".into(), "Old".into(), AppKind::Service);
+        allowed.enabled = true;
+        let live = vec![AppItem::new("Dnscache".into(), "DNS Client".into(), AppKind::Service)];
+        let merged = merge(&[stale, allowed], live);
+        let names: Vec<&str> = merged.iter().map(|a| a.path.as_str()).collect();
+        assert_eq!(names, ["Dnscache", "OldSvc"]);
     }
 }
