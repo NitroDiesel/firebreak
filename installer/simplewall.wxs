@@ -22,6 +22,8 @@
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="simplewall">
+        <!-- One file per component: the exe has no version resource, so WiX can
+             only generate component GUIDs for single-file components. -->
         <Component Id="App" Bitness="always64">
           <File Id="simplewall.exe" Source="payload\simplewall.exe" KeyPath="yes">
             <Shortcut
@@ -32,16 +34,28 @@
               Icon="simplewall.ico"
               Advertise="yes" />
           </File>
-          <File Source="payload\simplewall.exe.manifest" />
-          <File Source="payload\simplewall.ico" />
-          <File Source="payload\LICENSE" />
-          <File Source="payload\README.md" />
+        </Component>
+        <Component Id="Manifest" Bitness="always64">
+          <File Source="payload\simplewall.exe.manifest" KeyPath="yes" />
+        </Component>
+        <Component Id="AppIcon" Bitness="always64">
+          <File Source="payload\simplewall.ico" KeyPath="yes" />
+        </Component>
+        <Component Id="License" Bitness="always64">
+          <File Source="payload\LICENSE" KeyPath="yes" />
+        </Component>
+        <Component Id="Readme" Bitness="always64">
+          <File Source="payload\README.md" KeyPath="yes" />
         </Component>
       </Directory>
     </StandardDirectory>
 
     <Feature Id="Main" Title="simplewall">
       <ComponentRef Id="App" />
+      <ComponentRef Id="Manifest" />
+      <ComponentRef Id="AppIcon" />
+      <ComponentRef Id="License" />
+      <ComponentRef Id="Readme" />
     </Feature>
   </Package>
 </Wix>
