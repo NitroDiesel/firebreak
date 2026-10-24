@@ -1,0 +1,47 @@
+<!--
+  MSI installer for the Rust simplewall port, built with WiX v5 on GitHub Actions:
+    wix build -arch x64 -d Version=3.9.2 installer/simplewall.wxs -o dist/simplewall-3.9.2-setup.msi
+  Filters stay installed after uninstall, as with the NSIS setup. Remove them in the app first.
+  Keep UpgradeCode fixed so a newer MSI replaces an older one in place.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="simplewall"
+    Manufacturer="simplewall Rust port"
+    Version="$(Version)"
+    UpgradeCode="4C674A1A-C5EA-4115-829B-EDF6B1B0DD49"
+    Scope="perMachine"
+    Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of simplewall is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="simplewall.ico" SourceFile="simplewall.ico" />
+    <Property Id="ARPPRODUCTICON" Value="simplewall.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/NitroDiesel/simplewall" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="simplewall">
+        <Component Id="App" Bitness="always64">
+          <File Id="simplewall.exe" Source="payload\simplewall.exe" KeyPath="yes">
+            <Shortcut
+              Id="StartMenuShortcut"
+              Directory="ProgramMenuFolder"
+              Name="simplewall"
+              WorkingDirectory="INSTALLFOLDER"
+              Icon="simplewall.ico"
+              Advertise="yes" />
+          </File>
+          <File Source="payload\simplewall.exe.manifest" />
+          <File Source="payload\simplewall.ico" />
+          <File Source="payload\LICENSE" />
+          <File Source="payload\README.md" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="simplewall">
+      <ComponentRef Id="App" />
+    </Feature>
+  </Package>
+</Wix>

@@ -17,27 +17,48 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install NSIS
-        run: choco install nsis --no-progress -y
+      - name: Install NSIS and WiX
+        shell: pwsh
+        run: |
+          choco install nsis --no-progress -y
+          dotnet tool install --global wix --version 5.0.2
+          Join-Path $env:USERPROFILE ".dotnet\tools" >> $env:GITHUB_PATH
 
-      - name: Build setup and portable zip
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $version = "${{ github.ref_name }}" -replace '^v', ''
+          } else {
+            $cargo = Get-Content Cargo.toml -Raw
+            if ($cargo -notmatch 'version\s*=\s*"([^"]+)"') { throw "No version in Cargo.toml" }
+            $version = $Matches[1]
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build setup, MSI, and portable zip
         shell: pwsh
         run: ./installer/build.ps1
         env:
-          SIMPLEWALL_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '3.9.1' }}
+          SIMPLEWALL_VERSION: ${{ steps.version.outputs.version }}
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'v3.9.1' }}
-          name: simplewall ${{ github.ref_type == 'tag' && github.ref_name || '3.9.1' }}
+          tag_name: v${{ steps.version.outputs.version }}
+          name: simplewall ${{ steps.version.outputs.version }}
           make_latest: true
           files: |
             dist/*.exe
+            dist/*.msi
             dist/*.zip
           body: |
             Rust port of simplewall.
-            `simplewall-*-setup.exe` is the NSIS installer.
-            `simplewall-*-bin.zip` is the portable build.
+            - `simplewall-${{ steps.version.outputs.version }}-setup.exe` is the NSIS installer.
+            - `simplewall-${{ steps.version.outputs.version }}-setup.msi` is the Windows Installer package, for deployment with Group Policy, Intune, or `msiexec /i ... /qn`.
+            - `simplewall-${{ steps.version.outputs.version }}-bin.zip` is the portable build.
+
+            Install with either the .exe or the .msi, not both. Uninstalling leaves filters in place, so turn filtering off in the app first.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -3,7 +3,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const APP_NAME: &str = "simplewall";
-pub const APP_VERSION: &str = "3.9.1";
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// `PROC_SYSTEM_NAME`. WFP reports kernel traffic under this app id, not a file path.
 pub const SYSTEM_APP: &str = "System";
 

@@ -1,6 +1,6 @@
 # simplewall (Rust)
 
-Rust port of [simplewall](https://github.com/henrypp/simplewall) 3.9.1 by Henry++.
+Rust port of [simplewall](https://github.com/henrypp/simplewall) 3.9.2 by Henry++.
 The original program is GPL-3.0. This port is GPL-3.0 as well. See `LICENSE`.
 
 ![simplewall window](images/simplewall.png)
@@ -90,7 +90,13 @@ User and custom allow rules sit above the blocklist. To let a blocklist entry wi
 
 Create `simplewall.ini` next to the executable to store `profile.xml` in that folder. Otherwise the profile is `%ProgramData%\simplewall-rust\profile.xml`, which still exists after reboot when Administrator Protection isolates the elevated account. If the ProgramData file is not there yet, an older `%APPDATA%\simplewall-rust\profile.xml` is read once.
 
-The installer and portable zip are built on GitHub by the `release` workflow, not on a workstation. Run that workflow, or push a `v*` tag. The assets are attached to the GitHub release.
+Releases have three assets, all built on GitHub by the `release` workflow, not on a workstation:
+
+- `simplewall-<version>-setup.exe`: the NSIS installer.
+- `simplewall-<version>-setup.msi`: the Windows Installer package. Use it for Group Policy or Intune, or silently with `msiexec /i simplewall-<version>-setup.msi /qn`. A newer MSI upgrades an older one in place.
+- `simplewall-<version>-bin.zip`: the portable build.
+
+Install with one installer, not both; they use the same folder. Uninstalling leaves filters installed, so turn filtering off first. To publish, push a `v*` tag, or run the workflow, which takes the version from `Cargo.toml`.
 
 ## What this port covers
 

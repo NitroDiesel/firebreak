@@ -8,8 +8,11 @@ SetCompressor /SOLID lzma
 !include "MUI2.nsh"
 !include "x64.nsh"
 
+Icon "simplewall.ico"
+UninstallIcon "simplewall.ico"
+
 !ifndef VERSION
-  !define VERSION "3.9.1"
+  !define VERSION "3.9.2"
 !endif
 
 Name "simplewall"
@@ -35,6 +38,7 @@ Section "Install"
   SetOutPath "$INSTDIR"
   File "payload\simplewall.exe"
   File "payload\simplewall.exe.manifest"
+  File "payload\simplewall.ico"
   File "payload\LICENSE"
   File "payload\README.md"
 
@@ -46,12 +50,12 @@ Section "Install"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\simplewall" "Publisher" "simplewall Rust port"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\simplewall" "InstallLocation" "$INSTDIR"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\simplewall" "UninstallString" '"$INSTDIR\uninstall.exe"'
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\simplewall" "DisplayIcon" "$INSTDIR\simplewall.exe"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\simplewall" "DisplayIcon" "$INSTDIR\simplewall.ico"
   WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\simplewall" "NoModify" 1
   WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\simplewall" "NoRepair" 1
 
   CreateDirectory "$SMPROGRAMS\simplewall"
-  CreateShortcut "$SMPROGRAMS\simplewall\simplewall.lnk" "$INSTDIR\simplewall.exe"
+  CreateShortcut "$SMPROGRAMS\simplewall\simplewall.lnk" "$INSTDIR\simplewall.exe" "" "$INSTDIR\simplewall.ico"
   CreateShortcut "$SMPROGRAMS\simplewall\Uninstall simplewall.lnk" "$INSTDIR\uninstall.exe"
 SectionEnd
 
@@ -62,6 +66,7 @@ Section "Uninstall"
 
   Delete "$INSTDIR\simplewall.exe"
   Delete "$INSTDIR\simplewall.exe.manifest"
+  Delete "$INSTDIR\simplewall.ico"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\uninstall.exe"

@@ -1,5 +1,5 @@
-# Build the release binary, the NSIS setup, and a portable zip.
-# Intended to run on GitHub Actions (windows-latest). NSIS comes from that job.
+# Build the release binary, the NSIS setup, the MSI, and a portable zip.
+# Intended to run on GitHub Actions (windows-latest). NSIS and WiX come from that job.
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
@@ -21,9 +21,11 @@ New-Item -ItemType Directory -Force -Path $payload, $dist | Out-Null
 
 Copy-Item (Join-Path $root "target\release\simplewall.exe") $payload
 Copy-Item (Join-Path $PSScriptRoot "simplewall.exe.manifest") $payload
+Copy-Item (Join-Path $PSScriptRoot "simplewall.ico") $payload
 Copy-Item (Join-Path $root "LICENSE") $payload
 Copy-Item (Join-Path $root "README.md") $payload
 
+# NSIS setup (.exe)
 $makensis = @(
     (Get-Command makensis -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source),
     "${env:ProgramFiles(x86)}\NSIS\makensis.exe",
@@ -34,8 +36,20 @@ if (-not $makensis) { throw "makensis.exe was not found. Install NSIS on the run
 & $makensis "/DVERSION=$version" (Join-Path $PSScriptRoot "simplewall.nsi")
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+# Windows Installer package (.msi). Relative paths in the .wxs resolve from this folder.
+if (-not (Get-Command wix -ErrorAction SilentlyContinue)) { throw "wix was not found. Install the WiX dotnet tool on the runner." }
+$msi = Join-Path $dist "simplewall-$version-setup.msi"
+Push-Location $PSScriptRoot
+try {
+    wix build -arch x64 -d "Version=$version" simplewall.wxs -o $msi
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} finally {
+    Pop-Location
+}
+
 $portable = Join-Path $dist "simplewall-$version-bin.zip"
 if (Test-Path $portable) { Remove-Item $portable -Force }
 Compress-Archive -Path (Join-Path $payload "*") -DestinationPath $portable
 Write-Host "setup: $(Join-Path $dist "simplewall-$version-setup.exe")"
+Write-Host "msi: $msi"
 Write-Host "portable: $portable"
