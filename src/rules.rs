@@ -149,11 +149,10 @@ fn parse_v4_cidr(raw: &str) -> Result<(u32, u32), ParseError> {
             return Err(ParseError(format!("ipv4 prefix {prefix}")));
         }
         let mask = prefix_mask(prefix);
-        let addr = u32::from(ip).to_be() & mask;
-        return Ok((addr, mask));
+        return Ok((u32::from(ip) & mask, mask));
     }
     let ip = parse_v4(raw)?;
-    Ok((u32::from(ip).to_be(), prefix_mask(32)))
+    Ok((u32::from(ip), prefix_mask(32)))
 }
 
 fn parse_v4(raw: &str) -> Result<Ipv4Addr, ParseError> {
@@ -197,11 +196,12 @@ fn parse_prefix(raw: &str, max: u8) -> Result<u8, ParseError> {
     Ok(n as u8)
 }
 
+/// Host-order mask, so `/16` is `0xFFFF_0000`. WFP takes IPv4 values in host order.
 pub fn prefix_mask(prefix: u8) -> u32 {
     if prefix == 0 {
         0
     } else {
-        (!0u32 << (32 - prefix)).to_be()
+        !0u32 << (32 - prefix)
     }
 }
 
@@ -251,6 +251,42 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn ipv4_is_host_order() {
+        let t = parse_rule_list("192.168.1.7/16; 10.0.0.1-10.0.0.9").unwrap();
+        assert_eq!(
+            t[0],
+            Token::V4 {
+                addr: 0xC0A8_0000,
+                mask: 0xFFFF_0000,
+                port: None
+            }
+        );
+        assert_eq!(
+            t[1],
+            Token::V4Range {
+                start: 0x0A00_0001,
+                end: 0x0A00_0009,
+                port: None
+            }
+        );
+    }
+
+    #[test]
+    fn internal_rule_text_parses() {
+        let xml = include_str!("../resources/profile_internal.xml");
+        let mut bad = Vec::new();
+        for attr in [" rule=\"", " rule_local=\""] {
+            for part in xml.split(attr).skip(1) {
+                let text = part.split('"').next().unwrap_or_default();
+                if parse_rule_list(text).is_err() {
+                    bad.push(text.to_string());
+                }
+            }
+        }
+        assert!(bad.is_empty(), "unparsed: {bad:?}");
     }
 
     #[test]

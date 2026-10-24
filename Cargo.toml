@@ -8,19 +8,28 @@ publish = false
 
 [dependencies]
 eframe = "0.31"
+# Already in the tree through eframe; only PNG decoding for the bundled icons.
+image = { version = "0.25", default-features = false, features = ["png"] }
 quick-xml = "0.37"
 regex = "1"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Graphics_Gdi",
     "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_WindowsFilteringPlatform",
     "Win32_Networking_WinSock",
     "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_Console",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Registry",
     "Win32_System_Rpc",
     "Win32_System_Services",
     "Win32_System_Threading",
+    "Win32_System_Time",
+    "Win32_UI_Controls_Dialogs",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }

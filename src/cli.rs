@@ -82,7 +82,8 @@ simplewall {ver} (Rust port)
 \"simplewall.exe -status\" - report whether the provider is installed.
 \"simplewall.exe -help\" - show this message.
 
-With no arguments, the window opens. Create simplewall.ini next to the
+With no arguments, the window opens. In an interactive cmd prompt, use
+\"start /wait simplewall.exe -install\" to read the exit code. Create simplewall.ini next to the
 executable for a portable profile.xml. Otherwise settings are stored in
 %ProgramData%\\simplewall-rust\\profile.xml.",
         ver = crate::model::APP_VERSION

@@ -5,39 +5,41 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use quick_xml::events::Event;
+use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 
 use crate::model::{
-    AppItem, AppKind, Direction, Profile, Rule, RuleAction, RuleOrigin, Settings,
+    AppItem, AppKind, BlocklistGroup, BlocklistState, Direction, Profile, Rule, RuleAction,
+    RuleOrigin, Settings, SYSTEM_APP,
 };
 
 const INTERNAL: &str = include_str!("../resources/profile_internal.xml");
 
 pub fn load() -> Profile {
+    let text = load_path().and_then(|path| fs::read_to_string(path).ok());
+    from_user_text(text.as_deref())
+}
+
+fn from_user_text(text: Option<&str>) -> Profile {
+    let settings = text.map(parse_settings).unwrap_or_default();
     let mut profile = Profile {
-        rules: parse_internal(),
+        rules: default_rules(&settings),
+        settings,
         ..Profile::default()
     };
-    if let Some(path) = load_path() {
-        if let Ok(text) = fs::read_to_string(&path) {
-            merge_user(&mut profile, &text);
-        }
+    if let Some(text) = text {
+        merge_user(&mut profile, text);
     }
     profile
 }
 
 pub fn save(profile: &Profile) -> Result<PathBuf, String> {
     let path = user_path().ok_or_else(|| "could not resolve a profile directory".to_string())?;
-    write_profile(&path, profile)?;
-    Ok(path)
-}
-
-fn write_profile(path: &Path, profile: &Profile) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    fs::write(path, write_user(profile)).map_err(|e| e.to_string())
+    fs::write(&path, write_user(profile)).map_err(|e| e.to_string())?;
+    Ok(path)
 }
 
 /// Where new settings are written.
@@ -80,139 +82,101 @@ fn appdata_path() -> Option<PathBuf> {
     Some(PathBuf::from(appdata).join("simplewall-rust").join("profile.xml"))
 }
 
-fn parse_internal() -> Vec<Rule> {
-    parse_rules_xml(INTERNAL, true)
+/// Internal rules with blocklist group states applied. This is also the
+/// baseline `rules_config` is written against.
+fn default_rules(settings: &Settings) -> Vec<Rule> {
+    let mut profile = Profile {
+        rules: parse_rules(INTERNAL, true),
+        settings: settings.clone(),
+        ..Profile::default()
+    };
+    for rule in &mut profile.rules {
+        // Blocklist names outside the three groups are blocked, as in `_app_ruleblocklistsetstate`.
+        if rule.origin == RuleOrigin::Blocklist && BlocklistGroup::of(&rule.name).is_none() {
+            rule.enabled = true;
+            rule.action = RuleAction::Block;
+        }
+    }
+    for group in BlocklistGroup::all() {
+        profile.apply_blocklist(group);
+    }
+    profile.rules
 }
 
 fn merge_user(profile: &mut Profile, text: &str) {
-    let user_rules = parse_rules_xml(text, false);
-    for rule in user_rules {
+    for rule in parse_rules(text, false) {
         if rule.origin == RuleOrigin::User {
-            profile.rules.push(rule);
+            // Older builds read <apps> items as rules and saved them back as
+            // empty user rules. A rule with no address, protocol, or app matches nothing.
+            if !is_empty_rule(&rule) {
+                profile.rules.push(rule);
+            }
             continue;
         }
-        if let Some(existing) = profile.rules.iter_mut().find(|r| r.name == rule.name && r.origin == rule.origin)
+        if let Some(existing) = profile
+            .rules
+            .iter_mut()
+            .find(|r| r.name == rule.name && r.origin == rule.origin)
         {
-            existing.enabled = rule.enabled;
-        } else if let Some(existing) = profile.rules.iter_mut().find(|r| r.name == rule.name) {
             existing.enabled = rule.enabled;
         }
     }
     profile.apps = parse_apps(text);
-    profile.settings = parse_settings(text);
 }
 
-fn parse_rules_xml(text: &str, internal: bool) -> Vec<Rule> {
+fn is_empty_rule(rule: &Rule) -> bool {
+    rule.remote.trim().is_empty()
+        && rule.local.trim().is_empty()
+        && rule.apps.is_empty()
+        && rule.protocol == 0
+        && !rule.services
+        && !rule.kernel
+}
+
+fn attrs(e: &BytesStart) -> Vec<(String, String)> {
+    e.attributes()
+        .flatten()
+        .map(|attr| {
+            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+            let val = attr.unescape_value().map(|v| v.to_string()).unwrap_or_default();
+            (key, val)
+        })
+        .collect()
+}
+
+/// Reads `<item>` elements inside the rule sections only. `<apps>` items are not rules.
+fn parse_rules(text: &str, internal: bool) -> Vec<Rule> {
     let mut reader = Reader::from_str(text);
     reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
-    let mut section = RuleOrigin::User;
-    let mut config_only = false;
+    let mut section: Option<RuleOrigin> = None;
     let mut rules = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                match tag.as_str() {
-                    "rules_system" => {
-                        section = RuleOrigin::System;
-                        config_only = false;
-                    }
-                    "rules_blocklist" => {
-                        section = RuleOrigin::Blocklist;
-                        config_only = false;
-                    }
-                    "rules_custom" => {
-                        section = RuleOrigin::Custom;
-                        config_only = false;
-                    }
-                    "rules_user" => {
-                        section = RuleOrigin::User;
-                        config_only = false;
-                    }
-                    "rules_config" => {
-                        section = RuleOrigin::System;
-                        config_only = true;
-                    }
-                    "item" if is_rule_section(section, internal) || !internal => {
-                        let mut name = String::new();
-                        let mut remote = String::new();
-                        let mut local = String::new();
-                        let mut direction = Direction::Outbound;
-                        let mut protocol = 0u8;
-                        let mut enabled = false;
-                        let mut apps = String::new();
-                        let mut services = false;
-                        let mut kernel = false;
-                        let mut action = RuleAction::Permit;
-                        let mut origin = section;
-                        for attr in e.attributes().flatten() {
-                            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                            let val = attr
-                                .unescape_value()
-                                .map(|v| v.to_string())
-                                .unwrap_or_default();
-                            match key.as_str() {
-                                "name" => name = val,
-                                "rule" | "rule_remote" => remote = val,
-                                "rule_local" => local = val,
-                                "dir" => {
-                                    direction = Direction::from_attr(val.parse().unwrap_or(0))
-                                }
-                                "protocol" => protocol = val.parse().unwrap_or(0),
-                                "is_enabled" | "enabled" => enabled = is_true(&val),
-                                "apps" => apps = val,
-                                "is_services" | "services" => services = is_true(&val),
-                                "is_kernel" | "kernel" => kernel = is_true(&val),
-                                "action" => {
-                                    action = if val.eq_ignore_ascii_case("block") {
-                                        RuleAction::Block
-                                    } else {
-                                        RuleAction::Permit
-                                    };
-                                }
-                                "origin" => {
-                                    origin = match val.as_str() {
-                                        "system" => RuleOrigin::System,
-                                        "blocklist" => RuleOrigin::Blocklist,
-                                        "custom" => RuleOrigin::Custom,
-                                        _ => RuleOrigin::User,
-                                    };
-                                }
-                                _ => {}
-                            }
+            Ok(Event::Start(e)) => {
+                section = match e.name().as_ref() {
+                    b"rules_system" => Some(RuleOrigin::System),
+                    b"rules_blocklist" => Some(RuleOrigin::Blocklist),
+                    b"rules_custom" => Some(RuleOrigin::Custom),
+                    b"rules_user" => Some(RuleOrigin::User),
+                    // Only the enabled state of internal rules, keyed by name and origin.
+                    b"rules_config" => Some(RuleOrigin::System),
+                    b"item" => {
+                        if let Some(origin) = section {
+                            rules.extend(rule_from(&e, origin, internal));
                         }
-                        if internal {
-                            origin = section;
-                            action = if origin == RuleOrigin::Blocklist {
-                                RuleAction::Block
-                            } else {
-                                RuleAction::Permit
-                            };
-                        }
-                        let _ = config_only;
-                        if !name.is_empty() {
-                            rules.push(Rule {
-                                name,
-                                remote,
-                                local,
-                                direction,
-                                action,
-                                protocol,
-                                enabled,
-                                origin,
-                                apps: split_apps(&apps),
-                                services,
-                                kernel,
-                                readonly: origin != RuleOrigin::User,
-                            });
-                        }
+                        section
                     }
-                    _ => {}
+                    _ => None,
+                };
+            }
+            Ok(Event::Empty(e)) if e.name().as_ref() == b"item" => {
+                if let Some(origin) = section {
+                    rules.extend(rule_from(&e, origin, internal));
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
+            Ok(Event::End(e)) if e.name().as_ref().starts_with(b"rules_") => section = None,
+            Ok(Event::Eof) | Err(_) => break,
             _ => {}
         }
         buf.clear();
@@ -220,8 +184,55 @@ fn parse_rules_xml(text: &str, internal: bool) -> Vec<Rule> {
     rules
 }
 
-fn is_rule_section(section: RuleOrigin, internal: bool) -> bool {
-    internal || section != RuleOrigin::User || true
+fn rule_from(e: &BytesStart, section: RuleOrigin, internal: bool) -> Option<Rule> {
+    let mut rule = Rule {
+        name: String::new(),
+        remote: String::new(),
+        local: String::new(),
+        direction: Direction::Outbound,
+        action: RuleAction::Permit,
+        protocol: 0,
+        enabled: false,
+        origin: section,
+        apps: Vec::new(),
+        services: false,
+        kernel: false,
+        readonly: true,
+    };
+    for (key, val) in attrs(e) {
+        match key.as_str() {
+            "name" => rule.name = val,
+            "rule" | "rule_remote" => rule.remote = val,
+            "rule_local" => rule.local = val,
+            "dir" => rule.direction = Direction::from_attr(val.parse().unwrap_or(0)),
+            "protocol" => rule.protocol = val.parse().unwrap_or(0),
+            "is_enabled" | "enabled" => rule.enabled = is_true(&val),
+            "apps" => rule.apps = split_apps(&val),
+            "is_services" | "services" => rule.services = is_true(&val),
+            "is_kernel" | "kernel" => rule.kernel = is_true(&val),
+            "action" if !internal => {
+                rule.action = if val.eq_ignore_ascii_case("block") {
+                    RuleAction::Block
+                } else {
+                    RuleAction::Permit
+                };
+            }
+            "origin" if !internal => {
+                rule.origin = match val.as_str() {
+                    "system" => RuleOrigin::System,
+                    "blocklist" => RuleOrigin::Blocklist,
+                    "custom" => RuleOrigin::Custom,
+                    _ => RuleOrigin::User,
+                };
+            }
+            _ => {}
+        }
+    }
+    if internal && rule.origin == RuleOrigin::Blocklist {
+        rule.action = RuleAction::Block;
+    }
+    rule.readonly = rule.origin != RuleOrigin::User;
+    (!rule.name.is_empty()).then_some(rule)
 }
 
 fn parse_apps(text: &str) -> Vec<AppItem> {
@@ -232,70 +243,65 @@ fn parse_apps(text: &str) -> Vec<AppItem> {
     let mut apps = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => {
-                if e.name().as_ref() == b"apps" {
-                    in_apps = true;
-                }
-            }
-            Ok(Event::End(e)) => {
-                if e.name().as_ref() == b"apps" {
-                    in_apps = false;
-                }
-            }
+            Ok(Event::Start(e)) if e.name().as_ref() == b"apps" => in_apps = true,
+            Ok(Event::End(e)) if e.name().as_ref() == b"apps" => in_apps = false,
             Ok(Event::Empty(e)) if in_apps && e.name().as_ref() == b"item" => {
-                let mut path = String::new();
-                let mut name = String::new();
-                let mut enabled = false;
-                let mut timer = 0u64;
-                let mut comment = String::new();
-                let mut pinned = false;
-                let mut kind = AppKind::Regular;
-                for attr in e.attributes().flatten() {
-                    let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                    let val = attr.unescape_value().map(|v| v.to_string()).unwrap_or_default();
-                    match key.as_str() {
-                        "path" => path = val,
-                        "name" => name = val,
-                        "enabled" => enabled = is_true(&val),
-                        "timer" => timer = val.parse().unwrap_or(0),
-                        "comment" => comment = val,
-                        "pinned" => pinned = is_true(&val),
-                        "kind" => {
-                            kind = match val.as_str() {
-                                "service" => AppKind::Service,
-                                "system" => AppKind::System,
-                                "uwp" => AppKind::Uwp,
-                                _ => AppKind::Regular,
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                if !path.is_empty() {
-                    if name.is_empty() {
-                        name = Path::new(&path)
-                            .file_name()
-                            .map(|s| s.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| path.clone());
-                    }
-                    apps.push(AppItem {
-                        path,
-                        display_name: name,
-                        kind,
-                        enabled,
-                        timer_until: timer,
-                        comment,
-                        pinned,
-                    });
-                }
+                apps.extend(app_from(&e));
             }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
+            Ok(Event::Eof) | Err(_) => break,
             _ => {}
         }
         buf.clear();
     }
     apps
+}
+
+fn app_from(e: &BytesStart) -> Option<AppItem> {
+    let mut app = AppItem::new(String::new(), String::new(), AppKind::Regular);
+    app.added = 0;
+    for (key, val) in attrs(e) {
+        match key.as_str() {
+            "path" => app.path = val,
+            "name" => app.display_name = val,
+            "enabled" => app.enabled = is_true(&val),
+            "timer" => app.timer_until = val.parse().unwrap_or(0),
+            "comment" => app.comment = val,
+            "pinned" => app.pinned = is_true(&val),
+            "added" => app.added = val.parse().unwrap_or(0),
+            "kind" => {
+                app.kind = match val.as_str() {
+                    "service" => AppKind::Service,
+                    "system" => AppKind::System,
+                    "uwp" => AppKind::Uwp,
+                    _ => AppKind::Regular,
+                }
+            }
+            _ => {}
+        }
+    }
+    if app.path.is_empty() {
+        return None;
+    }
+    // Earlier builds keyed kernel traffic on ntoskrnl.exe. WFP calls it "System".
+    if app.kind == AppKind::System {
+        app.path = SYSTEM_APP.into();
+        app.display_name = SYSTEM_APP.into();
+    }
+    // Earlier builds keyed services by image path, so every svchost service
+    // shared one entry. Keep a permitted image as a plain app; drop the rest.
+    if app.kind == AppKind::Service && app.path.contains('\\') {
+        if !app.enabled {
+            return None;
+        }
+        app.kind = AppKind::Regular;
+    }
+    if app.display_name.is_empty() {
+        app.display_name = Path::new(&app.path)
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| app.path.clone());
+    }
+    Some(app)
 }
 
 fn parse_settings(text: &str) -> Settings {
@@ -305,24 +311,36 @@ fn parse_settings(text: &str) -> Settings {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Empty(e)) if e.name().as_ref() == b"settings" => {
-                for attr in e.attributes().flatten() {
-                    let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                    let val = attr.unescape_value().map(|v| v.to_string()).unwrap_or_default();
+                for (key, val) in attrs(&e) {
+                    let flag = is_true(&val);
+                    let state = BlocklistState::from_attr(&val);
                     match key.as_str() {
-                        "allow_loopback" => settings.allow_loopback = is_true(&val),
-                        "allow_ipv6" => settings.allow_ipv6 = is_true(&val),
-                        "allow_lan" => settings.allow_lan = is_true(&val),
+                        "allow_loopback" => settings.allow_loopback = flag,
+                        "allow_ipv6" => settings.allow_ipv6 = flag,
+                        "allow_lan" => settings.allow_lan = flag,
                         "user_allows_override_blocklist" => {
-                            settings.user_allows_override_blocklist = is_true(&val)
+                            settings.user_allows_override_blocklist = flag
                         }
-                        "log_to_file" => settings.log_to_file = is_true(&val),
-                        "filters_temporary" => settings.filters_temporary = is_true(&val),
+                        "log_to_file" => settings.log_to_file = flag,
+                        "filters_temporary" => settings.filters_temporary = flag,
+                        "always_on_top" => settings.always_on_top = flag,
+                        "show_filenames_only" => settings.show_filenames_only = flag,
+                        "log_ui" => settings.log_ui = flag,
+                        "blocklist_spy" => {
+                            settings.blocklist_spy = state.unwrap_or(settings.blocklist_spy)
+                        }
+                        "blocklist_update" => {
+                            settings.blocklist_update = state.unwrap_or(settings.blocklist_update)
+                        }
+                        "blocklist_extra" => {
+                            settings.blocklist_extra = state.unwrap_or(settings.blocklist_extra)
+                        }
                         _ => {}
                     }
                 }
+                break;
             }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
+            Ok(Event::Eof) | Err(_) => break,
             _ => {}
         }
         buf.clear();
@@ -334,24 +352,31 @@ fn write_user(profile: &Profile) -> String {
     let mut xml = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<root version=\"6\">\n");
     let s = &profile.settings;
     xml.push_str(&format!(
-        "\t<settings allow_loopback=\"{}\" allow_ipv6=\"{}\" allow_lan=\"{}\" user_allows_override_blocklist=\"{}\" log_to_file=\"{}\" filters_temporary=\"{}\" />\n",
+        "\t<settings allow_loopback=\"{}\" allow_ipv6=\"{}\" allow_lan=\"{}\" user_allows_override_blocklist=\"{}\" log_to_file=\"{}\" filters_temporary=\"{}\" always_on_top=\"{}\" show_filenames_only=\"{}\" log_ui=\"{}\" blocklist_spy=\"{}\" blocklist_update=\"{}\" blocklist_extra=\"{}\" />\n",
         bool_attr(s.allow_loopback),
         bool_attr(s.allow_ipv6),
         bool_attr(s.allow_lan),
         bool_attr(s.user_allows_override_blocklist),
         bool_attr(s.log_to_file),
-        bool_attr(s.filters_temporary)
+        bool_attr(s.filters_temporary),
+        bool_attr(s.always_on_top),
+        bool_attr(s.show_filenames_only),
+        bool_attr(s.log_ui),
+        s.blocklist_spy as u8,
+        s.blocklist_update as u8,
+        s.blocklist_extra as u8,
     ));
     xml.push_str("\t<apps>\n");
     for app in &profile.apps {
         xml.push_str(&format!(
-            "\t\t<item path=\"{}\" name=\"{}\" enabled=\"{}\" timer=\"{}\" kind=\"{}\" pinned=\"{}\" comment=\"{}\" />\n",
+            "\t\t<item path=\"{}\" name=\"{}\" enabled=\"{}\" timer=\"{}\" kind=\"{}\" pinned=\"{}\" added=\"{}\" comment=\"{}\" />\n",
             esc(&app.path),
             esc(&app.display_name),
             bool_attr(app.enabled),
             app.timer_until,
             kind_attr(app.kind),
             bool_attr(app.pinned),
+            app.added,
             esc(&app.comment)
         ));
     }
@@ -359,8 +384,18 @@ fn write_user(profile: &Profile) -> String {
     for rule in profile.rules.iter().filter(|r| r.origin == RuleOrigin::User) {
         xml.push_str(&rule_item(rule));
     }
+    // Only internal rules the user switched away from their default, so a
+    // blocklist group change is not pinned by 1500 stale entries.
     xml.push_str("\t</rules_user>\n\t<rules_config>\n");
+    let defaults = default_rules(&profile.settings);
     for rule in profile.rules.iter().filter(|r| r.origin != RuleOrigin::User) {
+        let default = defaults
+            .iter()
+            .find(|d| d.origin == rule.origin && d.name == rule.name)
+            .map(|d| d.enabled);
+        if default == Some(rule.enabled) {
+            continue;
+        }
         xml.push_str(&format!(
             "\t\t<item name=\"{}\" origin=\"{}\" is_enabled=\"{}\" />\n",
             esc(&rule.name),
@@ -434,11 +469,71 @@ mod tests {
 
     #[test]
     fn internal_rules_load() {
-        let rules = parse_internal();
+        let rules = default_rules(&Settings::default());
         assert!(rules.len() > 20);
-        assert!(rules.iter().any(|r| r.name == "DNS"));
         let dns = rules.iter().find(|r| r.name == "DNS").unwrap();
         assert!(dns.enabled);
         assert_eq!(dns.protocol, 17);
+    }
+
+    #[test]
+    fn blocklist_defaults_block_spy_only() {
+        let rules = default_rules(&Settings::default());
+        let group = |prefix: &str| {
+            rules
+                .iter()
+                .filter(|r| r.origin == RuleOrigin::Blocklist && r.name.starts_with(prefix))
+                .collect::<Vec<_>>()
+        };
+        assert!(group("spy_").iter().all(|r| r.enabled && r.action == RuleAction::Block));
+        assert!(group("extra_").iter().all(|r| !r.enabled));
+        assert!(!group("spy_").is_empty());
+    }
+
+    #[test]
+    fn saved_apps_are_not_read_as_rules() {
+        let mut profile = from_user_text(None);
+        let mut app = AppItem::new(r"C:\a\b.exe".into(), "b.exe".into(), AppKind::Regular);
+        app.enabled = true;
+        profile.apps.push(app);
+        profile.rules.push(Rule {
+            name: "web".into(),
+            remote: "443".into(),
+            local: String::new(),
+            direction: Direction::Outbound,
+            action: RuleAction::Permit,
+            protocol: 6,
+            enabled: true,
+            origin: RuleOrigin::User,
+            apps: vec![r"C:\a\b.exe".into()],
+            services: false,
+            kernel: false,
+            readonly: false,
+        });
+        let first = write_user(&profile);
+        let again = write_user(&from_user_text(Some(&first)));
+        assert_eq!(first, again);
+        let loaded = from_user_text(Some(&again));
+        let user: Vec<_> = loaded.rules.iter().filter(|r| r.origin == RuleOrigin::User).collect();
+        assert_eq!(user.len(), 1);
+        assert_eq!(loaded.apps.len(), 1);
+        assert!(loaded.apps[0].enabled);
+    }
+
+    #[test]
+    fn rule_overrides_survive_a_round_trip() {
+        let mut profile = from_user_text(None);
+        let dns = profile.rules.iter_mut().find(|r| r.name == "DNS").unwrap();
+        dns.enabled = false;
+        let loaded = from_user_text(Some(&write_user(&profile)));
+        assert!(!loaded.rules.iter().find(|r| r.name == "DNS").unwrap().enabled);
+    }
+
+    #[test]
+    fn old_phantom_rules_are_dropped() {
+        let text = r#"<root><apps><item path="C:\x.exe" name="x.exe" enabled="false" /></apps>
+            <rules_user><item name="x.exe" rule="" rule_local="" dir="0" protocol="0" action="allow" enabled="true" apps="" /></rules_user></root>"#;
+        let loaded = from_user_text(Some(text));
+        assert!(loaded.rules.iter().all(|r| r.origin != RuleOrigin::User));
     }
 }

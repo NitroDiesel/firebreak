@@ -13,6 +13,7 @@ use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6};
 
 #[derive(Clone, Debug)]
 pub struct Endpoint {
+    pub name: String,
     pub proto: &'static str,
     pub local: String,
     pub remote: String,
@@ -26,6 +27,14 @@ pub fn connections() -> Vec<Endpoint> {
     tcp_v6(&mut rows);
     udp_v4(&mut rows);
     udp_v6(&mut rows);
+    let names = crate::apps::process_names();
+    for row in &mut rows {
+        row.name = match row.pid {
+            0 => "System Idle Process".into(),
+            4 => crate::model::SYSTEM_APP.into(),
+            pid => names.get(&pid).cloned().unwrap_or_else(|| format!("PID {pid}")),
+        };
+    }
     rows
 }
 
@@ -55,7 +64,8 @@ fn tcp_v4(out: &mut Vec<Endpoint>) {
                 continue;
             }
             out.push(Endpoint {
-                proto: "TCP",
+                name: String::new(),
+                proto: "tcp",
                 local: format!("{}:{}", ipv4(row.dwLocalAddr), u16::from_be(row.dwLocalPort as u16)),
                 remote: format!("{}:{}", ipv4(row.dwRemoteAddr), u16::from_be(row.dwRemotePort as u16)),
                 state: "Established".into(),
@@ -78,7 +88,8 @@ fn tcp_v6(out: &mut Vec<Endpoint>) {
                 continue;
             }
             out.push(Endpoint {
-                proto: "TCP6",
+                name: String::new(),
+                proto: "tcp6",
                 local: format!("[{}]:{}", ipv6(&row.ucLocalAddr), u16::from_be(row.dwLocalPort as u16)),
                 remote: format!("[{}]:{}", ipv6(&row.ucRemoteAddr), u16::from_be(row.dwRemotePort as u16)),
                 state: "Established".into(),
@@ -98,7 +109,8 @@ fn udp_v4(out: &mut Vec<Endpoint>) {
         for i in 0..count as usize {
             let row = &*rows.add(i);
             out.push(Endpoint {
-                proto: "UDP",
+                name: String::new(),
+                proto: "udp",
                 local: format!("{}:{}", ipv4(row.dwLocalAddr), u16::from_be(row.dwLocalPort as u16)),
                 remote: "*".into(),
                 state: "Listen".into(),
@@ -118,7 +130,8 @@ fn udp_v6(out: &mut Vec<Endpoint>) {
         for i in 0..count as usize {
             let row = &*rows.add(i);
             out.push(Endpoint {
-                proto: "UDP6",
+                name: String::new(),
+                proto: "udp6",
                 local: format!("[{}]:{}", ipv6(&row.ucLocalAddr), u16::from_be(row.dwLocalPort as u16)),
                 remote: "*".into(),
                 state: "Listen".into(),

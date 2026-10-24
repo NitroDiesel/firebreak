@@ -2720,6 +2720,7 @@ name = "simplewall"
 version = "3.9.1"
 dependencies = [
  "eframe",
+ "image",
  "quick-xml 0.37.5",
  "regex",
  "windows 0.61.3",

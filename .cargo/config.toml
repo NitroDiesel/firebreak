@@ -1,4 +1,0 @@
-[target.'cfg(windows)']
-# The original simplewall manifest requires elevation. A sidecar .manifest is
-# ignored once the linker embeds its own, so the UAC level has to be on the link line.
-rustflags = ["-C", "link-arg=/MANIFESTUAC:level='requireAdministrator' uiAccess='false'"]
