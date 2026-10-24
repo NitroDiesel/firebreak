@@ -126,6 +126,8 @@ pub struct Source<'a> {
     pub query: &'a str,
     pub sort: Sort,
     pub collapsed: &'a HashSet<u8>,
+    /// Lowercase path to signer (None = not signed), from the background checks.
+    pub signers: &'a std::collections::HashMap<String, Option<String>>,
 }
 
 enum Key {
@@ -251,8 +253,15 @@ fn apps(kind: AppKind, src: &Source) -> Vec<Entry> {
             AppKind::System | AppKind::Service => true,
             AppKind::Uwp => false,
         };
+        // Outer None: not checked (yet); inner None: not signed.
+        let signer = (profile.settings.check_signatures && app.kind == AppKind::Regular)
+            .then(|| src.signers.get(&app.path.to_lowercase()).cloned())
+            .flatten();
+        // Same order as `_app_getappcolor`: invalid, signed, undeletable, system.
         let fill = if !exists {
             Some(theme::FILL_INVALID)
+        } else if matches!(signer, Some(Some(_))) {
+            Some(theme::FILL_SIGNED)
         } else if app.pinned {
             Some(theme::FILL_UNDELETE)
         } else if system {
@@ -290,6 +299,12 @@ fn apps(kind: AppKind, src: &Source) -> Vec<Entry> {
         }
         if app.has_timer() {
             hint.push_str(&format!("\nTimer: until {}", shell::format_time(app.timer_until)));
+        }
+        match &signer {
+            Some(Some(name)) if !name.is_empty() => hint.push_str(&format!("\nSignature: {name}")),
+            Some(Some(_)) => hint.push_str("\nSignature: valid"),
+            Some(None) => hint.push_str("\nSignature: not signed"),
+            None => {}
         }
         let group = if app.enabled {
             if app.has_timer() {

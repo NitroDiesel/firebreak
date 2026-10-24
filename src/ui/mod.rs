@@ -3,6 +3,7 @@
 //! Filter installs run on a worker thread so the list never stalls.
 
 mod dialogs;
+mod inspect;
 mod list;
 mod notify;
 mod shell;
@@ -165,6 +166,11 @@ pub struct SimplewallApp {
     startup: Option<dialogs::Startup>,
     /// Always-on-top state last sent to the window.
     on_top: bool,
+    /// Signature and hash checks.
+    inspector: inspect::Inspector,
+    /// Allowed apps waiting for a fresh hash to compare against later.
+    hash_baseline: HashSet<String>,
+    last_hash_sweep: Instant,
     /// Running elevated; needed for event subscriptions.
     admin: bool,
     /// Live dropped-connection events, while notifications or a log need them.
@@ -242,6 +248,9 @@ impl SimplewallApp {
             start_minimized,
             startup: None,
             on_top: false,
+            inspector: inspect::Inspector::spawn(ctx.clone()),
+            hash_baseline: HashSet::new(),
+            last_hash_sweep: Instant::now(),
             admin: wfp::is_admin(),
             events: None,
             events_tx,
@@ -369,6 +378,13 @@ impl SimplewallApp {
 
     fn rebuild(&mut self) {
         let index = self.tab.index();
+        let s = &self.profile.settings;
+        if s.check_signatures {
+            for app in self.profile.apps.iter().filter(|a| a.kind == AppKind::Regular) {
+                self.inspector.want_signature(&app.path, s.check_revocation);
+            }
+        }
+        let signers = self.inspector.signers();
         let source = view::Source {
             profile: &self.profile,
             connections: &self.connections,
@@ -376,6 +392,7 @@ impl SimplewallApp {
             query: &self.query,
             sort: self.sorts[index],
             collapsed: &self.collapsed[index],
+            signers: &signers,
         };
         self.lines = view::build(self.tab, &source);
         self.unused = self.profile.apps.iter().filter(|a| self.profile.app_is_unused(a)).count();
@@ -631,12 +648,18 @@ impl SimplewallApp {
             self.alerts.remove(self.alert_index);
             return;
         }
+        let s = &self.profile.settings;
+        let signature = (s.check_signatures && app.kind == AppKind::Regular).then(|| {
+            self.inspector.want_signature(&app.path, s.check_revocation);
+            self.inspector.signer(&app.path)
+        });
         let alert = notify::Alert {
             packet: &packet,
             app: &app,
             position: self.alert_index,
             count: self.alerts.len(),
             accent: self.accent,
+            signature: signature.flatten(),
         };
         let files = &mut self.files;
         let action = ctx.show_viewport_immediate(
@@ -686,6 +709,61 @@ impl SimplewallApp {
             }
             notify::Action::Next => self.alert_index = (self.alert_index + 1) % self.alerts.len(),
             notify::Action::Dismiss => done(&mut self.alerts),
+        }
+    }
+
+    /// IsHashesEnabled: an allowed app whose file changes on disk is blocked
+    /// again (`_app_queue_hashes`). The hash is taken when the app is allowed and
+    /// compared every 10 minutes.
+    fn check_file_hashes(&mut self, ctx: &egui::Context) {
+        if !self.profile.settings.check_hashes {
+            self.hash_baseline.clear();
+            return;
+        }
+        const SWEEP: Duration = Duration::from_secs(10 * 60);
+        let sweep = self.last_hash_sweep.elapsed() >= SWEEP;
+        if sweep {
+            self.last_hash_sweep = Instant::now();
+        }
+        ctx.request_repaint_after(SWEEP.saturating_sub(self.last_hash_sweep.elapsed()));
+        let (mut changed, mut save) = (Vec::new(), false);
+        let inspector = &mut self.inspector;
+        for app in self.profile.apps.iter_mut().filter(|a| a.kind == AppKind::Regular) {
+            let key = app.path.to_lowercase();
+            if !app.enabled {
+                // Taken again when the app is allowed next time.
+                if !app.hash.is_empty() {
+                    app.hash.clear();
+                    save = true;
+                }
+                continue;
+            }
+            if app.hash.is_empty() {
+                if self.hash_baseline.insert(key.clone()) {
+                    inspector.want_hash(&app.path, true);
+                } else if let Some(Some(hash)) = inspector.hash(&app.path) {
+                    app.hash = hash;
+                    self.hash_baseline.remove(&key);
+                    save = true;
+                }
+                continue;
+            }
+            if sweep {
+                inspector.want_hash(&app.path, true);
+            } else if let Some(Some(hash)) = inspector.hash(&app.path) {
+                if !hash.eq_ignore_ascii_case(&app.hash) {
+                    app.enabled = false;
+                    app.timer_until = 0;
+                    app.hash = hash;
+                    changed.push(app.display_name.clone());
+                }
+            }
+        }
+        if !changed.is_empty() {
+            self.notify(format!("Changed on disk, so blocked again: {}", changed.join(", ")), true);
+            self.changed();
+        } else if save {
+            self.save();
         }
     }
 
@@ -1638,7 +1716,14 @@ impl SimplewallApp {
                 let before = self.profile.settings.clone();
                 let startup = self.startup.get_or_insert_with(dialogs::Startup::read);
                 let effect = dialogs::settings(ctx, &mut self.profile, startup);
-                if before.show_filenames_only != self.profile.settings.show_filenames_only {
+                let after = &self.profile.settings;
+                if before.show_filenames_only != after.show_filenames_only
+                    || before.check_signatures != after.check_signatures
+                {
+                    self.dirty = true;
+                }
+                if before.check_revocation != after.check_revocation {
+                    self.inspector.reset_signatures();
                     self.dirty = true;
                 }
                 for group in BlocklistGroup::all() {
@@ -1719,6 +1804,10 @@ impl eframe::App for SimplewallApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
         }
         self.drain_events();
+        if self.inspector.changed() {
+            self.dirty = true;
+        }
+        self.check_file_hashes(ctx);
         self.guard_close(ctx);
         self.shortcuts(ctx);
         if self.dirty {

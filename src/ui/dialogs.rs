@@ -457,18 +457,27 @@ enum Page {
     General,
     Filters,
     Blocklist,
+    Security,
     Notifications,
     Logging,
 }
 
 impl Page {
-    const ALL: [Page; 5] = [Page::General, Page::Filters, Page::Blocklist, Page::Notifications, Page::Logging];
+    const ALL: [Page; 6] = [
+        Page::General,
+        Page::Filters,
+        Page::Blocklist,
+        Page::Security,
+        Page::Notifications,
+        Page::Logging,
+    ];
 
     fn label(self) -> &'static str {
         match self {
             Page::General => "General",
             Page::Filters => "Filters",
             Page::Blocklist => "Blocklist",
+            Page::Security => "Security",
             Page::Notifications => "Notifications",
             Page::Logging => "Packets log",
         }
@@ -557,6 +566,21 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                                 ui.end_row();
                             }
                         });
+                    }
+                    Page::Security => {
+                        section(ui, "Files");
+                        saved |= ui.checkbox(&mut s.check_signatures, "Check digital signatures").changed();
+                        ui.add_enabled_ui(s.check_signatures, |ui| {
+                            saved |= ui
+                                .checkbox(&mut s.check_revocation, "Check certificate revocation online (slower)")
+                                .changed();
+                        });
+                        hint(ui, "Signed apps are shown in green, with the signer in the tooltip.");
+                        ui.add_space(6.0);
+                        saved |= ui
+                            .checkbox(&mut s.check_hashes, "Block an allowed app again when its file changes")
+                            .changed();
+                        hint(ui, "Takes a SHA-256 of each allowed app and compares it every 10 minutes.");
                     }
                     Page::Notifications => {
                         section(ui, "Notifications");

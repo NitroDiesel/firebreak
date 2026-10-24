@@ -75,6 +75,7 @@ pub fn merge(saved: &[AppItem], live: Vec<AppItem>) -> Vec<AppItem> {
                 comment: prev.comment.clone(),
                 pinned: prev.pinned,
                 silent: prev.silent,
+                hash: prev.hash.clone(),
                 last_notify: prev.last_notify,
                 added: if prev.added == 0 { app.added } else { prev.added },
                 ..app

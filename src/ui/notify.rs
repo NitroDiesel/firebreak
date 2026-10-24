@@ -14,7 +14,7 @@ use super::list::FileIcons;
 use super::shell;
 use super::theme;
 
-pub const SIZE: [f32; 2] = [420.0, 276.0];
+pub const SIZE: [f32; 2] = [420.0, 298.0];
 
 pub enum Action {
     None,
@@ -57,6 +57,8 @@ pub struct Alert<'a> {
     pub position: usize,
     pub count: usize,
     pub accent: Color32,
+    /// Outer None: not checked; inner None: not signed.
+    pub signature: Option<Option<String>>,
 }
 
 pub fn show(ctx: &egui::Context, alert: &Alert, files: &mut FileIcons) -> Action {
@@ -125,6 +127,14 @@ pub fn show(ctx: &egui::Context, alert: &Alert, files: &mut FileIcons) -> Action
                     ui.end_row();
                 };
                 row("File", p.path.clone());
+                if let Some(signature) = &alert.signature {
+                    let text = match signature {
+                        Some(name) if !name.is_empty() => name.clone(),
+                        Some(_) => "Valid".into(),
+                        None => "Not signed".into(),
+                    };
+                    row("Signature", text);
+                }
                 row("Address", if p.remote_addr.is_empty() { "—".into() } else { p.remote_addr.clone() });
                 row("Port", if p.remote_port == 0 { "—".into() } else { p.remote_port.to_string() });
                 row("Protocol", protocol_label(p.protocol).to_string());

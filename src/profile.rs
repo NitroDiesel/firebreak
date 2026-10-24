@@ -365,6 +365,7 @@ fn app_from(e: &BytesStart) -> Option<AppItem> {
             "comment" => app.comment = val,
             "pinned" | "is_undeletable" => app.pinned = is_true(&val),
             "silent" | "is_silent" => app.silent = is_true(&val),
+            "hash" => app.hash = val,
             "added" | "timestamp" => app.added = val.parse().unwrap_or(0),
             "kind" => {
                 kind_set = true;
@@ -444,7 +445,7 @@ fn write_user(profile: &Profile) -> String {
     xml.push_str("\t<apps>\n");
     for app in &profile.apps {
         xml.push_str(&format!(
-            "\t\t<item path=\"{}\" name=\"{}\" enabled=\"{}\" timer=\"{}\" kind=\"{}\" pinned=\"{}\" silent=\"{}\" added=\"{}\" comment=\"{}\" />\n",
+            "\t\t<item path=\"{}\" name=\"{}\" enabled=\"{}\" timer=\"{}\" kind=\"{}\" pinned=\"{}\" silent=\"{}\" hash=\"{}\" added=\"{}\" comment=\"{}\" />\n",
             esc(&app.path),
             esc(&app.display_name),
             bool_attr(app.enabled),
@@ -452,6 +453,7 @@ fn write_user(profile: &Profile) -> String {
             kind_attr(app.kind),
             bool_attr(app.pinned),
             bool_attr(app.silent),
+            esc(&app.hash),
             app.added,
             esc(&app.comment)
         ));

@@ -147,6 +147,8 @@ pub struct AppItem {
     pub silent: bool,
     /// Unix seconds of the last notification, so one app does not alert every packet.
     pub last_notify: u64,
+    /// SHA-256 of the file when it was allowed, with IsHashesEnabled.
+    pub hash: String,
 }
 
 impl AppItem {
@@ -162,6 +164,7 @@ impl AppItem {
             added: now_unix(),
             silent: false,
             last_notify: 0,
+            hash: String::new(),
         }
     }
 
@@ -301,6 +304,12 @@ settings! {
     notifications_fullscreen_silent: bool = true,
     /// NotificationsTimeout: seconds before the same app can alert again.
     notifications_timeout: u64 = 60,
+    /// IsCertificatesEnabled: check digital signatures and show signed apps in green.
+    check_signatures: bool = true,
+    /// IsOCSPEnabled: also check certificate revocation online.
+    check_revocation: bool = false,
+    /// IsHashesEnabled: block an allowed app when its file changes on disk.
+    check_hashes: bool = false,
     /// IsStartMinimized: start in the tray.
     start_minimized: bool = false,
     /// ConfirmExit2: ask before exiting while filters are on.
