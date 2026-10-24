@@ -25,6 +25,7 @@ use crate::wfp::{self, Packet};
 
 use dialogs::{Ask, Dialog, Effect, RuleDraft, TIMERS};
 use list::{FileIcons, Line, List, Sort};
+use crate::tray::{Tray, TrayCommand, TrayState};
 use theme::Icons;
 use view::Tab;
 
@@ -114,6 +115,8 @@ enum Action {
     PrevTab,
     PurgeUnused,
     PurgeTimers,
+    ShowLog,
+    ClearLog,
     Delete,
     Open,
     Toggle,
@@ -148,10 +151,20 @@ pub struct SimplewallApp {
     underline: Option<Underline>,
     /// Set once the close confirmation was accepted.
     closing: bool,
+    tray: Option<Tray>,
+    tray_rx: Receiver<TrayCommand>,
+    /// Last state sent to the tray, so it is only refreshed on change.
+    tray_state: TrayState,
+    /// Minimized with the taskbar button removed.
+    in_tray: bool,
+    /// Go to the tray on the first frame (`-minimized` or "Start minimized").
+    start_minimized: bool,
+    /// Task Scheduler state, read when Settings first opens.
+    startup: Option<dialogs::Startup>,
 }
 
 impl SimplewallApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, minimized: bool) -> Self {
         let ctx = &cc.egui_ctx;
         let accent = theme::accent();
         theme::apply(ctx, accent);
@@ -162,6 +175,13 @@ impl SimplewallApp {
         }
         let filters_on = wfp::filters_installed().unwrap_or(false);
         let sort = Sort { column: 0, descending: false };
+        let start_minimized = minimized || profile.settings.start_minimized;
+        let (tray_tx, tray_rx) = channel();
+        let tray_state = tray_state_of(&profile, filters_on, false);
+        let tray = Tray::spawn(ctx.clone(), tray_tx, tray_state.clone());
+        if let (Some(tray), Some(hwnd)) = (&tray, main_hwnd(cc)) {
+            tray.set_main_window(hwnd);
+        }
         let mut app = Self {
             profile,
             accent,
@@ -187,6 +207,12 @@ impl SimplewallApp {
             dialog: None,
             underline: None,
             closing: false,
+            tray,
+            tray_rx,
+            tray_state,
+            in_tray: false,
+            start_minimized,
+            startup: None,
         };
         // Packets log sorts newest first, as in the C build.
         app.sorts[Tab::Packets.index()] = Sort { column: 1, descending: true };
@@ -416,15 +442,110 @@ impl SimplewallApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
+    /// Keep the tray icon and menu checkmarks in step with the window.
+    fn sync_tray(&mut self, ctx: &egui::Context) {
+        let Some(tray) = &self.tray else {
+            return;
+        };
+        let state = tray_state_of(&self.profile, self.filters_on, self.worker.busy());
+        if state != self.tray_state {
+            tray.set_state(state.clone());
+            self.tray_state = state;
+        }
+        // Minimizing sends the window to the tray, as in the C build.
+        let minimized = ctx.input(|i| i.viewport().minimized).unwrap_or(false);
+        if self.start_minimized {
+            self.start_minimized = false;
+            tray.hide_main();
+            self.in_tray = true;
+        } else if minimized && !self.in_tray {
+            tray.hide_main();
+            self.in_tray = true;
+        } else if !minimized && self.in_tray {
+            self.in_tray = false;
+        }
+    }
+
+    fn handle_tray(&mut self, ctx: &egui::Context) {
+        while let Ok(command) = self.tray_rx.try_recv() {
+            let s = &mut self.profile.settings;
+            match command {
+                TrayCommand::ToggleFilters => {
+                    self.show_window();
+                    self.dialog = Some(Dialog::Confirm(Ask::Filters(!self.filters_on)));
+                }
+                TrayCommand::Notifications => {
+                    s.notifications = !s.notifications;
+                    self.save();
+                }
+                TrayCommand::NotificationSound => {
+                    s.notifications_sound = !s.notifications_sound;
+                    self.save();
+                }
+                TrayCommand::FullscreenSilent => {
+                    s.notifications_fullscreen_silent = !s.notifications_fullscreen_silent;
+                    self.save();
+                }
+                TrayCommand::LogFile => {
+                    s.log_to_file = !s.log_to_file;
+                    self.save();
+                }
+                TrayCommand::LogUi => {
+                    let on = !s.log_ui;
+                    self.set_log_ui(on);
+                }
+                TrayCommand::ShowLog => self.show_log(),
+                TrayCommand::ClearLog => {
+                    self.show_window();
+                    self.dialog = Some(Dialog::Confirm(Ask::ClearLog));
+                }
+                TrayCommand::Settings => self.dialog = Some(Dialog::Settings),
+                TrayCommand::Website => shell::open("https://github.com/NitroDiesel/simplewall"),
+                TrayCommand::About => self.dialog = Some(Dialog::About),
+                TrayCommand::Exit => {
+                    self.show_window();
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
+    }
+
+    /// Bring the window back from the tray, for questions that need an answer.
+    fn show_window(&mut self) {
+        if let Some(tray) = &self.tray {
+            tray.show_main();
+        }
+        self.in_tray = false;
+    }
+
     /// Ask before closing while timers still hold apps open.
     fn guard_close(&mut self, ctx: &egui::Context) {
         if self.closing || !ctx.input(|i| i.viewport().close_requested()) {
             return;
         }
         let timers = self.profile.apps.iter().filter(|a| a.has_timer()).count();
-        if self.filters_on && timers > 0 {
+        let ask = if !self.filters_on {
+            None
+        } else if timers > 0 {
+            Some(Ask::CloseWithTimers(timers))
+        } else if self.profile.settings.confirm_exit {
+            Some(Ask::Exit)
+        } else {
+            None
+        };
+        if let Some(ask) = ask {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.dialog = Some(Dialog::Confirm(Ask::CloseWithTimers(timers)));
+            self.show_window();
+            self.dialog = Some(Dialog::Confirm(ask));
+        }
+    }
+
+    fn show_log(&mut self) {
+        let path = log::log_path();
+        if path.exists() {
+            shell::open(&path.to_string_lossy());
+        } else {
+            self.notify("The log file is empty.", false);
         }
     }
 
@@ -568,6 +689,12 @@ impl SimplewallApp {
             let cut = i.events.iter().any(|e| matches!(e, Event::Cut));
             if i.consume_key(ctrl_shift, Key::X) || (cut && i.modifiers.shift && !typing) {
                 actions.push(Action::PurgeUnused);
+            } else if cut && !typing {
+                // Ctrl+X clears the log in the C build (asks first here, #2109).
+                actions.push(Action::ClearLog);
+            }
+            if i.consume_key(Modifiers::CTRL, Key::I) {
+                actions.push(Action::ShowLog);
             }
             if i.consume_key(ctrl_shift, Key::T) {
                 actions.push(Action::PurgeTimers);
@@ -625,6 +752,8 @@ impl SimplewallApp {
                 }
                 Action::PurgeUnused => self.ask_purge_unused(),
                 Action::PurgeTimers => self.purge_timers(),
+                Action::ShowLog => self.show_log(),
+                Action::ClearLog => self.dialog = Some(Dialog::Confirm(Ask::ClearLog)),
                 Action::Delete => selected.into_iter().for_each(|id| self.delete(id)),
                 Action::Open => selected.into_iter().for_each(|id| self.open(id)),
                 Action::Toggle => selected.into_iter().for_each(|id| self.toggle(id)),
@@ -792,6 +921,12 @@ impl SimplewallApp {
                         self.dialog = Some(Dialog::Rule(RuleDraft::new(apps)));
                     }
                     tool_separator(ui);
+                    let alert = self.icons.error.clone();
+                    let notifications = self.profile.settings.notifications;
+                    if tool_button(ui, &alert, None, "Enable packets notifications", notifications, accent).clicked() {
+                        self.profile.settings.notifications = !notifications;
+                        self.save();
+                    }
                     let note = self.icons.note.clone();
                     let log_file = self.profile.settings.log_to_file;
                     if tool_button(ui, &note, None, "Log to file", log_file, accent).clicked() {
@@ -814,16 +949,11 @@ impl SimplewallApp {
                     }
                     tool_separator(ui);
                     let show = self.icons.log_show.clone();
-                    if tool_button(ui, &show, None, "Show log", false, accent).clicked() {
-                        let path = log::log_path();
-                        if path.exists() {
-                            shell::open(&path.to_string_lossy());
-                        } else {
-                            self.notify("The log file is empty.", false);
-                        }
+                    if tool_button(ui, &show, None, "Show log (Ctrl+I)", false, accent).clicked() {
+                        self.show_log();
                     }
                     let clear = self.icons.log_clear.clone();
-                    if tool_button(ui, &clear, None, "Clear log", false, accent).clicked() {
+                    if tool_button(ui, &clear, None, "Clear log (Ctrl+X)", false, accent).clicked() {
                         self.dialog = Some(Dialog::Confirm(Ask::ClearLog));
                     }
 
@@ -1220,7 +1350,11 @@ impl SimplewallApp {
             Dialog::App(index) => dialogs::app_properties(ctx, *index, &mut self.profile),
             Dialog::Settings => {
                 let before = self.profile.settings.clone();
-                let effect = dialogs::settings(ctx, &mut self.profile);
+                let startup = self.startup.get_or_insert_with(dialogs::Startup::read);
+                let effect = dialogs::settings(ctx, &mut self.profile, startup);
+                if before.show_filenames_only != self.profile.settings.show_filenames_only {
+                    self.dirty = true;
+                }
                 for group in BlocklistGroup::all() {
                     if before.blocklist(group) != self.profile.settings.blocklist(group) {
                         self.profile.apply_blocklist(group);
@@ -1246,6 +1380,14 @@ impl SimplewallApp {
                 self.changed();
                 true
             }
+            Effect::Saved => {
+                self.save();
+                true
+            }
+            Effect::Error(err) => {
+                self.notify(err, true);
+                true
+            }
             Effect::SaveRule(rule, index) => {
                 match index {
                     Some(i) if i < self.profile.rules.len() => self.profile.rules[i] = *rule,
@@ -1265,6 +1407,14 @@ impl SimplewallApp {
                     Ask::PurgeUnused(_) => self.purge_unused(),
                     Ask::ClearLog => self.clear_log(),
                     Ask::CloseWithTimers(_) => self.end_timers_and_close(ctx),
+                    Ask::Exit => {
+                        if temporary {
+                            self.profile.settings.confirm_exit = false;
+                            self.save();
+                        }
+                        self.closing = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
                 }
                 false
             }
@@ -1282,6 +1432,8 @@ impl eframe::App for SimplewallApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_worker();
         self.tick_timers(ctx);
+        self.handle_tray(ctx);
+        self.sync_tray(ctx);
         self.guard_close(ctx);
         self.shortcuts(ctx);
         if self.dirty {
@@ -1338,4 +1490,26 @@ fn tool_separator(ui: &mut Ui) {
 fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     Color32::from_rgb(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()))
+}
+
+/// The native handle of the main window, for the tray to minimize and restore it.
+fn main_hwnd(cc: &eframe::CreationContext<'_>) -> Option<isize> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match cc.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(handle) => Some(handle.hwnd.get()),
+        _ => None,
+    }
+}
+
+fn tray_state_of(profile: &Profile, filters_on: bool, busy: bool) -> TrayState {
+    let s = &profile.settings;
+    TrayState {
+        filters_on,
+        busy,
+        notifications: s.notifications,
+        sound: s.notifications_sound,
+        fullscreen_silent: s.notifications_fullscreen_silent,
+        log_file: s.log_to_file,
+        log_ui: s.log_ui,
+    }
 }

@@ -5,11 +5,13 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod apps;
+mod autorun;
 mod cli;
 mod log;
 mod model;
 mod profile;
 mod rules;
+mod tray;
 mod ui;
 mod wfp;
 
@@ -25,20 +27,29 @@ use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 /// Passed to the elevated copy so it does not try to elevate again.
-const ELEVATED_FLAG: &str = "-elevated";
+pub const ELEVATED_FLAG: &str = "-elevated";
+/// Start in the tray. Used by the "Load on system startup" task.
+pub const MINIMIZED_FLAG: &str = "-minimized";
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let relaunched = args.iter().any(|a| a.eq_ignore_ascii_case(ELEVATED_FLAG));
-    args.retain(|a| !a.eq_ignore_ascii_case(ELEVATED_FLAG));
+    let has = |args: &[String], flag: &str| args.iter().any(|a| a.eq_ignore_ascii_case(flag));
+    let relaunched = has(&args, ELEVATED_FLAG);
+    let minimized = has(&args, MINIMIZED_FLAG);
+    args.retain(|a| !a.eq_ignore_ascii_case(ELEVATED_FLAG) && !a.eq_ignore_ascii_case(MINIMIZED_FLAG));
     if !args.is_empty() {
         attach_parent_console();
         let code = cli::run(&args);
         std::process::exit(code);
     }
+    // One window at a time, as in the C build: a second launch shows the first.
+    if tray::signal_running_instance() {
+        return;
+    }
     // Filters need an elevated token, like the C build's requireAdministrator
-    // manifest. If the prompt is declined the window still opens read-only.
-    if !relaunched && !wfp::is_admin() && relaunch_elevated() {
+    // manifest. The skip-UAC task elevates without a prompt; otherwise ask.
+    // If the prompt is declined the window still opens read-only.
+    if !relaunched && !wfp::is_admin() && (autorun::run_skip_uac() || relaunch_elevated(minimized)) {
         return;
     }
     let options = eframe::NativeOptions {
@@ -55,20 +66,24 @@ fn main() {
     if let Err(err) = eframe::run_native(
         "simplewall",
         options,
-        Box::new(|cc| Ok(Box::new(ui::SimplewallApp::new(cc)))),
+        Box::new(move |cc| Ok(Box::new(ui::SimplewallApp::new(cc, minimized)))),
     ) {
         eprintln!("{err}");
         std::process::exit(1);
     }
 }
 
-fn relaunch_elevated() -> bool {
+fn relaunch_elevated(minimized: bool) -> bool {
     let Ok(exe) = std::env::current_exe() else {
         return false;
     };
     let verb = apps::wide("runas");
     let file = apps::wide(&exe.to_string_lossy());
-    let params = apps::wide(ELEVATED_FLAG);
+    let params = if minimized {
+        apps::wide(&format!("{ELEVATED_FLAG} {MINIMIZED_FLAG}"))
+    } else {
+        apps::wide(ELEVATED_FLAG)
+    };
     let result = unsafe {
         ShellExecuteW(
             None,

@@ -9,7 +9,7 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 
 use crate::model::{
-    AppItem, AppKind, BlocklistGroup, BlocklistState, Direction, Profile, Rule, RuleAction,
+    AppItem, AppKind, BlocklistGroup, Direction, Profile, Rule, RuleAction,
     RuleOrigin, Settings, SYSTEM_APP,
 };
 
@@ -267,6 +267,7 @@ fn app_from(e: &BytesStart) -> Option<AppItem> {
             "timer" => app.timer_until = val.parse().unwrap_or(0),
             "comment" => app.comment = val,
             "pinned" => app.pinned = is_true(&val),
+            "silent" => app.silent = is_true(&val),
             "added" => app.added = val.parse().unwrap_or(0),
             "kind" => {
                 app.kind = match val.as_str() {
@@ -312,31 +313,7 @@ fn parse_settings(text: &str) -> Settings {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Empty(e)) if e.name().as_ref() == b"settings" => {
                 for (key, val) in attrs(&e) {
-                    let flag = is_true(&val);
-                    let state = BlocklistState::from_attr(&val);
-                    match key.as_str() {
-                        "allow_loopback" => settings.allow_loopback = flag,
-                        "allow_ipv6" => settings.allow_ipv6 = flag,
-                        "allow_lan" => settings.allow_lan = flag,
-                        "user_allows_override_blocklist" => {
-                            settings.user_allows_override_blocklist = flag
-                        }
-                        "log_to_file" => settings.log_to_file = flag,
-                        "filters_temporary" => settings.filters_temporary = flag,
-                        "always_on_top" => settings.always_on_top = flag,
-                        "show_filenames_only" => settings.show_filenames_only = flag,
-                        "log_ui" => settings.log_ui = flag,
-                        "blocklist_spy" => {
-                            settings.blocklist_spy = state.unwrap_or(settings.blocklist_spy)
-                        }
-                        "blocklist_update" => {
-                            settings.blocklist_update = state.unwrap_or(settings.blocklist_update)
-                        }
-                        "blocklist_extra" => {
-                            settings.blocklist_extra = state.unwrap_or(settings.blocklist_extra)
-                        }
-                        _ => {}
-                    }
+                    settings.set_attr(&key, &val);
                 }
                 break;
             }
@@ -350,32 +327,22 @@ fn parse_settings(text: &str) -> Settings {
 
 fn write_user(profile: &Profile) -> String {
     let mut xml = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<root version=\"6\">\n");
-    let s = &profile.settings;
-    xml.push_str(&format!(
-        "\t<settings allow_loopback=\"{}\" allow_ipv6=\"{}\" allow_lan=\"{}\" user_allows_override_blocklist=\"{}\" log_to_file=\"{}\" filters_temporary=\"{}\" always_on_top=\"{}\" show_filenames_only=\"{}\" log_ui=\"{}\" blocklist_spy=\"{}\" blocklist_update=\"{}\" blocklist_extra=\"{}\" />\n",
-        bool_attr(s.allow_loopback),
-        bool_attr(s.allow_ipv6),
-        bool_attr(s.allow_lan),
-        bool_attr(s.user_allows_override_blocklist),
-        bool_attr(s.log_to_file),
-        bool_attr(s.filters_temporary),
-        bool_attr(s.always_on_top),
-        bool_attr(s.show_filenames_only),
-        bool_attr(s.log_ui),
-        s.blocklist_spy as u8,
-        s.blocklist_update as u8,
-        s.blocklist_extra as u8,
-    ));
+    xml.push_str("\t<settings");
+    for (key, value) in profile.settings.attrs() {
+        xml.push_str(&format!(" {key}=\"{}\"", esc(&value)));
+    }
+    xml.push_str(" />\n");
     xml.push_str("\t<apps>\n");
     for app in &profile.apps {
         xml.push_str(&format!(
-            "\t\t<item path=\"{}\" name=\"{}\" enabled=\"{}\" timer=\"{}\" kind=\"{}\" pinned=\"{}\" added=\"{}\" comment=\"{}\" />\n",
+            "\t\t<item path=\"{}\" name=\"{}\" enabled=\"{}\" timer=\"{}\" kind=\"{}\" pinned=\"{}\" silent=\"{}\" added=\"{}\" comment=\"{}\" />\n",
             esc(&app.path),
             esc(&app.display_name),
             bool_attr(app.enabled),
             app.timer_until,
             kind_attr(app.kind),
             bool_attr(app.pinned),
+            bool_attr(app.silent),
             app.added,
             esc(&app.comment)
         ));

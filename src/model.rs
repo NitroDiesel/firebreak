@@ -143,6 +143,10 @@ pub struct AppItem {
     pub pinned: bool,
     /// Unix seconds when the app first appeared in the list.
     pub added: u64,
+    /// `is_silent`: never show a notification for this app.
+    pub silent: bool,
+    /// Unix seconds of the last notification, so one app does not alert every packet.
+    pub last_notify: u64,
 }
 
 impl AppItem {
@@ -156,6 +160,8 @@ impl AppItem {
             comment: String::new(),
             pinned: false,
             added: now_unix(),
+            silent: false,
+            last_notify: 0,
         }
     }
 
@@ -198,22 +204,108 @@ impl Rule {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct Settings {
-    pub allow_loopback: bool,
-    pub allow_ipv6: bool,
-    pub allow_lan: bool,
+/// A setting stored as one attribute of `<settings>` in profile.xml.
+pub trait SettingValue: Sized {
+    fn parse(text: &str) -> Option<Self>;
+    fn format(&self) -> String;
+}
+
+impl SettingValue for bool {
+    fn parse(text: &str) -> Option<Self> {
+        Some(matches!(text.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
+    }
+    fn format(&self) -> String {
+        if *self { "true" } else { "false" }.into()
+    }
+}
+
+impl SettingValue for u64 {
+    fn parse(text: &str) -> Option<Self> {
+        text.trim().parse().ok()
+    }
+    fn format(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl SettingValue for BlocklistState {
+    fn parse(text: &str) -> Option<Self> {
+        Self::from_attr(text)
+    }
+    fn format(&self) -> String {
+        (*self as u8).to_string()
+    }
+}
+
+/// Declares every setting once: field, type, default. Attribute names in
+/// profile.xml are the field names. The C build's config key is noted beside each.
+macro_rules! settings {
+    ($( $(#[$doc:meta])* $field:ident : $ty:ty = $default:expr ),* $(,)?) => {
+        #[derive(Clone, Debug, PartialEq)]
+        pub struct Settings {
+            $( $(#[$doc])* pub $field: $ty, )*
+        }
+
+        impl Default for Settings {
+            fn default() -> Self {
+                Self { $( $field: $default, )* }
+            }
+        }
+
+        impl Settings {
+            /// Every setting as (attribute, value), in declaration order.
+            pub fn attrs(&self) -> Vec<(&'static str, String)> {
+                vec![ $( (stringify!($field), SettingValue::format(&self.$field)), )* ]
+            }
+
+            /// Apply one attribute from profile.xml. Unknown keys and bad values are ignored.
+            pub fn set_attr(&mut self, key: &str, value: &str) {
+                match key {
+                    $( stringify!($field) => {
+                        if let Some(v) = <$ty as SettingValue>::parse(value) {
+                            self.$field = v;
+                        }
+                    } )*
+                    _ => {}
+                }
+            }
+        }
+    };
+}
+
+settings! {
+    /// AllowLoopbackConnections
+    allow_loopback: bool = true,
+    /// AllowIPv6: neighbor discovery and 6to4.
+    allow_ipv6: bool = true,
+    /// Private, link-local, and multicast ranges.
+    allow_lan: bool = false,
     /// User and custom allow rules outrank the internal blocklist.
-    pub user_allows_override_blocklist: bool,
-    pub log_to_file: bool,
-    pub filters_temporary: bool,
-    pub blocklist_spy: BlocklistState,
-    pub blocklist_update: BlocklistState,
-    pub blocklist_extra: BlocklistState,
-    pub always_on_top: bool,
-    pub show_filenames_only: bool,
-    /// Keep dropped-packet events in the engine for the Packets log tab.
-    pub log_ui: bool,
+    user_allows_override_blocklist: bool = true,
+    filters_temporary: bool = false,
+    // Same defaults as BlocklistSpyState / UpdateState / ExtraState in db.c.
+    blocklist_spy: BlocklistState = BlocklistState::Block,
+    blocklist_update: BlocklistState = BlocklistState::Disable,
+    blocklist_extra: BlocklistState = BlocklistState::Disable,
+    /// IsLogEnabled: write dropped packets to simplewall.csv.
+    log_to_file: bool = false,
+    /// IsLogUiEnabled: collect dropped packets for the Packets log tab.
+    log_ui: bool = true,
+    /// IsNotificationsEnabled
+    notifications: bool = true,
+    /// IsNotificationsSound
+    notifications_sound: bool = true,
+    /// IsNotificationsFullscreenSilentMode: no sound while a full-screen app is in front.
+    notifications_fullscreen_silent: bool = true,
+    /// NotificationsTimeout: seconds before the same app can alert again.
+    notifications_timeout: u64 = 60,
+    /// IsStartMinimized: start in the tray.
+    start_minimized: bool = false,
+    /// ConfirmExit2: ask before exiting while filters are on.
+    confirm_exit: bool = true,
+    always_on_top: bool = false,
+    /// ShowFilenames
+    show_filenames_only: bool = true,
 }
 
 impl Settings {
@@ -230,26 +322,6 @@ impl Settings {
             BlocklistGroup::Spy => self.blocklist_spy = state,
             BlocklistGroup::Update => self.blocklist_update = state,
             BlocklistGroup::Extra => self.blocklist_extra = state,
-        }
-    }
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            allow_loopback: true,
-            allow_ipv6: true,
-            allow_lan: false,
-            user_allows_override_blocklist: true,
-            log_to_file: false,
-            filters_temporary: false,
-            // Same defaults as BlocklistSpyState / UpdateState / ExtraState in db.c.
-            blocklist_spy: BlocklistState::Block,
-            blocklist_update: BlocklistState::Disable,
-            blocklist_extra: BlocklistState::Disable,
-            always_on_top: false,
-            show_filenames_only: true,
-            log_ui: true,
         }
     }
 }
@@ -346,6 +418,21 @@ mod tests {
         assert!(!query_matches("nope", false, &["simplewall.exe"]));
         assert!(query_matches(r"re:simple.*exe", false, &["simplewall.exe"]));
         assert!(!query_matches(r"re:[", false, &["simplewall.exe"]));
+    }
+
+    #[test]
+    fn settings_round_trip_through_attributes() {
+        let mut saved = Settings::default();
+        saved.notifications = false;
+        saved.notifications_timeout = 5;
+        saved.blocklist_update = BlocklistState::Allow;
+        let mut loaded = Settings::default();
+        for (key, value) in saved.attrs() {
+            loaded.set_attr(key, &value);
+        }
+        assert_eq!(saved, loaded);
+        loaded.set_attr("notifications_timeout", "not a number");
+        assert_eq!(loaded.notifications_timeout, 5);
     }
 
     #[test]

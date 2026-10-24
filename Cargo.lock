@@ -2722,6 +2722,7 @@ dependencies = [
  "eframe",
  "image",
  "quick-xml 0.37.5",
+ "raw-window-handle",
  "regex",
  "windows 0.61.3",
 ]

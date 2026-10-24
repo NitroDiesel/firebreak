@@ -34,8 +34,11 @@ pub enum Dialog {
 pub enum Effect {
     None,
     Close,
-    /// The profile was edited in place.
+    /// The profile was edited in place; save and reinstall filters.
     Changed,
+    /// A setting that does not affect filters changed; save only.
+    Saved,
+    Error(String),
     SaveRule(Box<Rule>, Option<usize>),
     /// The confirmation was accepted; the flag is "until reboot" for filtering.
     Accept(Ask, bool),
@@ -419,62 +422,182 @@ pub fn app_properties(ctx: &egui::Context, index: usize, profile: &mut Profile) 
     effect
 }
 
-pub fn settings(ctx: &egui::Context, profile: &mut Profile) -> Effect {
+/// Task Scheduler state for the General page. Reading it runs schtasks, so the
+/// window reads it once, when Settings first opens.
+#[derive(Clone, Copy)]
+pub struct Startup {
+    pub autorun: bool,
+    pub skip_uac: bool,
+}
+
+impl Startup {
+    pub fn read() -> Self {
+        Self {
+            autorun: crate::autorun::autorun_enabled(),
+            skip_uac: crate::autorun::skip_uac_enabled(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum Page {
+    #[default]
+    General,
+    Filters,
+    Blocklist,
+    Notifications,
+    Logging,
+}
+
+impl Page {
+    const ALL: [Page; 5] = [Page::General, Page::Filters, Page::Blocklist, Page::Notifications, Page::Logging];
+
+    fn label(self) -> &'static str {
+        match self {
+            Page::General => "General",
+            Page::Filters => "Filters",
+            Page::Blocklist => "Blocklist",
+            Page::Notifications => "Notifications",
+            Page::Logging => "Packets log",
+        }
+    }
+}
+
+/// Settings with a page list on the left, like the C build's settings dialog.
+/// Filter options return `Changed` (save and reinstall); the rest return `Saved`.
+pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startup) -> Effect {
     let mut effect = Effect::None;
     let mut open = true;
+    let page_id = egui::Id::new("settings_page");
+    let mut page: Page = ctx.data(|d| d.get_temp(page_id)).unwrap_or_default();
     window("Settings").open(&mut open).show(ctx, |ui| {
-        ui.set_width(440.0);
-        let s = &mut profile.settings;
-        section(ui, "Filtering");
-        let mut changed = false;
-        changed |= ui.checkbox(&mut s.allow_loopback, "Allow loopback connections").changed();
-        changed |= ui.checkbox(&mut s.allow_ipv6, "Allow IPv6 neighbor discovery and 6to4").changed();
-        changed |= ui.checkbox(&mut s.allow_lan, "Allow local network (LAN)").changed();
-        changed |= ui
-            .checkbox(&mut s.user_allows_override_blocklist, "User rules take priority over the blocklist")
-            .changed();
-
-        section(ui, "Blocklist");
-        egui::Grid::new("blocklist").num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
-            for group in BlocklistGroup::all() {
-                ui.label(group.label());
-                let mut state = s.blocklist(group);
-                ui.horizontal(|ui| {
-                    for option in BlocklistState::all() {
-                        ui.selectable_value(&mut state, option, option.label());
+        ui.set_width(620.0);
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(140.0);
+                for p in Page::ALL {
+                    let selected = page == p;
+                    let text = RichText::new(p.label()).color(if selected { theme::TEXT } else { theme::TEXT_MUTED });
+                    if ui.add_sized([140.0, 28.0], egui::SelectableLabel::new(selected, text)).clicked() {
+                        page = p;
                     }
-                });
-                if state != s.blocklist(group) {
-                    s.set_blocklist(group, state);
-                    changed = true;
                 }
-                ui.end_row();
-            }
+            });
+            ui.separator();
+            ui.vertical(|ui| {
+                ui.set_width(450.0);
+                ui.set_min_height(330.0);
+                let s = &mut profile.settings;
+                let mut filters = false;
+                let mut saved = false;
+                match page {
+                    Page::General => {
+                        section(ui, "Startup");
+                        let mut autorun = startup.autorun;
+                        if ui.checkbox(&mut autorun, "Load on system startup").changed() {
+                            match crate::autorun::set_autorun(autorun) {
+                                Ok(()) => startup.autorun = autorun,
+                                Err(err) => effect = Effect::Error(err),
+                            }
+                        }
+                        saved |= ui.checkbox(&mut s.start_minimized, "Start minimized").changed();
+                        let mut skip_uac = startup.skip_uac;
+                        if ui.checkbox(&mut skip_uac, "Skip UAC warning").changed() {
+                            match crate::autorun::set_skip_uac(skip_uac) {
+                                Ok(()) => startup.skip_uac = skip_uac,
+                                Err(err) => effect = Effect::Error(err),
+                            }
+                        }
+                        hint(ui, "Both use Task Scheduler with highest privileges, so no UAC prompt appears.");
+                        section(ui, "Window");
+                        saved |= ui.checkbox(&mut s.always_on_top, "Always on top").changed();
+                        saved |= ui.checkbox(&mut s.show_filenames_only, "Show filenames only").changed();
+                        saved |= ui.checkbox(&mut s.confirm_exit, "Ask before exiting while filters are on").changed();
+                        if let Some(path) = crate::profile::user_path() {
+                            ui.add_space(10.0);
+                            hint(ui, &format!("Profile: {}", path.display()));
+                        }
+                    }
+                    Page::Filters => {
+                        section(ui, "Allow");
+                        filters |= ui.checkbox(&mut s.allow_loopback, "Allow loopback connections").changed();
+                        filters |= ui.checkbox(&mut s.allow_ipv6, "Allow IPv6 neighbor discovery and 6to4").changed();
+                        filters |= ui.checkbox(&mut s.allow_lan, "Allow local network (LAN)").changed();
+                        filters |= ui
+                            .checkbox(&mut s.user_allows_override_blocklist, "User rules take priority over the blocklist")
+                            .changed();
+                    }
+                    Page::Blocklist => {
+                        section(ui, "Blocklist");
+                        egui::Grid::new("blocklist").num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
+                            for group in BlocklistGroup::all() {
+                                ui.label(group.label());
+                                let mut state = s.blocklist(group);
+                                ui.horizontal(|ui| {
+                                    for option in BlocklistState::all() {
+                                        ui.selectable_value(&mut state, option, option.label());
+                                    }
+                                });
+                                if state != s.blocklist(group) {
+                                    s.set_blocklist(group, state);
+                                    filters = true;
+                                }
+                                ui.end_row();
+                            }
+                        });
+                    }
+                    Page::Notifications => {
+                        section(ui, "Notifications");
+                        saved |= ui.checkbox(&mut s.notifications, "Enable packets notifications").changed();
+                        ui.add_enabled_ui(s.notifications, |ui| {
+                            saved |= ui.checkbox(&mut s.notifications_sound, "Enable notifications sound").changed();
+                            saved |= ui
+                                .checkbox(
+                                    &mut s.notifications_fullscreen_silent,
+                                    "Enable silent-mode when full screen app in foreground",
+                                )
+                                .changed();
+                            ui.horizontal(|ui| {
+                                ui.label("Do not repeat for the same app within");
+                                saved |= ui
+                                    .add(egui::DragValue::new(&mut s.notifications_timeout).range(0..=86_400).suffix(" s"))
+                                    .changed();
+                            });
+                        });
+                        hint(ui, "A notification appears when an app that is not allowed tries to connect.");
+                    }
+                    Page::Logging => {
+                        section(ui, "Packets log");
+                        saved |= ui.checkbox(&mut s.log_to_file, "Enable packets logging to a file").changed();
+                        saved |= ui
+                            .checkbox(&mut s.log_ui, "Enable packets logging interface (session only)")
+                            .changed();
+                        hint(ui, &format!("Log file: {}", crate::log::log_path().display()));
+                    }
+                }
+                if filters {
+                    effect = Effect::Changed;
+                } else if saved && matches!(effect, Effect::None) {
+                    effect = Effect::Saved;
+                }
+            });
         });
-
-        section(ui, "Interface");
-        changed |= ui.checkbox(&mut s.always_on_top, "Always on top").changed();
-        changed |= ui.checkbox(&mut s.show_filenames_only, "Show filenames only").changed();
-        changed |= ui.checkbox(&mut s.log_to_file, "Write a log file (simplewall.csv)").changed();
-
-        if let Some(path) = crate::profile::user_path() {
-            ui.add_space(10.0);
-            ui.label(RichText::new(format!("Profile: {}", path.display())).small().color(theme::TEXT_MUTED));
-        }
         ui.add_space(6.0);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.button("Close").clicked() {
                 effect = Effect::Close;
             }
         });
-        if changed {
-            effect = Effect::Changed;
-        }
     });
+    ctx.data_mut(|d| d.insert_temp(page_id, page));
     if !open {
         effect = Effect::Close;
     }
     effect
+}
+
+fn hint(ui: &mut Ui, text: &str) {
+    ui.label(RichText::new(text).small().color(theme::TEXT_MUTED));
 }
 
 fn section(ui: &mut Ui, title: &str) {
@@ -522,6 +645,8 @@ pub enum Ask {
     ClearLog,
     /// Close while this many app timers are still running.
     CloseWithTimers(usize),
+    /// Exit while filters are on (ConfirmExit2).
+    Exit,
 }
 
 pub fn confirm(ctx: &egui::Context, ask: Ask, accent: Color32) -> Effect {
@@ -547,6 +672,11 @@ pub fn confirm(ctx: &egui::Context, ask: Ask, accent: Color32) -> Effect {
             "This deletes simplewall.csv and empties the Packets log.".to_string(),
             "Clear",
         ),
+        Ask::Exit => (
+            "Exit simplewall?".to_string(),
+            "Installed filters will continue to work even if you exit. Continue?".to_string(),
+            "Exit",
+        ),
         Ask::CloseWithTimers(count) => (
             "End running timers?".to_string(),
             format!(
@@ -560,11 +690,19 @@ pub fn confirm(ctx: &egui::Context, ask: Ask, accent: Color32) -> Effect {
         ui.label(RichText::new(title).font(theme::semibold(16.0)));
         ui.add_space(6.0);
         ui.label(body);
+        // "Do not ask again" for the exit question, as the C build offers.
+        let quiet_id = egui::Id::new("confirm_quiet");
+        let mut quiet = ui.data(|d| d.get_temp::<bool>(quiet_id)).unwrap_or(false);
+        if matches!(ask, Ask::Exit) {
+            ui.add_space(8.0);
+            ui.checkbox(&mut quiet, "Do not ask again");
+            ui.data_mut(|d| d.insert_temp(quiet_id, quiet));
+        }
         ui.add_space(14.0);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let primary = egui::Button::new(RichText::new(action).color(theme::text_on(accent))).fill(accent);
             if ui.add(primary).clicked() {
-                effect = Effect::Accept(ask, false);
+                effect = Effect::Accept(ask, matches!(ask, Ask::Exit) && quiet);
             }
             if matches!(ask, Ask::Filters(true)) && ui.button("Until reboot").clicked() {
                 effect = Effect::Accept(ask, true);
