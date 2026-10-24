@@ -16,8 +16,83 @@ use crate::model::{
 const INTERNAL: &str = include_str!("../resources/profile_internal.xml");
 
 pub fn load() -> Profile {
-    let text = load_path().and_then(|path| fs::read_to_string(path).ok());
+    // A damaged profile falls back to the backup, as `_app_profile_load` does.
+    let read = |path: PathBuf| {
+        let text = crate::swc::decode(&fs::read(path).ok()?).ok()?;
+        text.contains("<root").then_some(text)
+    };
+    let text = load_path().and_then(|path| read(path.clone()).or_else(|| read(backup_path(&path))));
     from_user_text(text.as_deref())
+}
+
+/// `profile.xml.bak` next to the profile.
+fn backup_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".bak");
+    PathBuf::from(name)
+}
+
+/// How long a backup is kept before the next save refreshes it (BACKUP_HOURS_PERIOD).
+const BACKUP_PERIOD: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// What an import brought in.
+pub struct Imported {
+    pub apps: usize,
+    pub rules: usize,
+    /// The file came from the C build, not this port.
+    pub from_original: bool,
+}
+
+/// Replace the apps and rules with a profile file's: this port's own, or the
+/// C build's (plain, compressed, or encrypted). Settings are kept unless the
+/// file is this port's, since the C build keeps them in simplewall.ini.
+pub fn import(profile: &mut Profile, bytes: &[u8]) -> Result<Imported, String> {
+    let text = crate::swc::decode(bytes)?;
+    if !text.contains("<root") {
+        return Err("This is not a simplewall profile.".into());
+    }
+    let ours = text.contains("<settings") || text.contains("<rules_user");
+    let imported = if ours {
+        from_user_text(Some(&text))
+    } else {
+        let mut imported = Profile {
+            rules: default_rules(&profile.settings),
+            settings: profile.settings.clone(),
+            ..Profile::default()
+        };
+        // The C build's user rules are in rules_custom; they are this port's user rules.
+        let text = text.replace("<rules_custom", "<rules_user").replace("</rules_custom", "</rules_user");
+        merge_user(&mut imported, &text);
+        for rule in imported.rules.iter_mut().filter(|r| r.origin == RuleOrigin::User) {
+            rule.readonly = false;
+        }
+        imported
+    };
+    let result = Imported {
+        apps: imported.apps.len(),
+        rules: imported.rules.iter().filter(|r| r.origin == RuleOrigin::User).count(),
+        from_original: !ours,
+    };
+    *profile = imported;
+    Ok(result)
+}
+
+/// Write this port's profile format to `path`.
+pub fn export(profile: &Profile, path: &Path) -> Result<(), String> {
+    fs::write(path, write_user(profile)).map_err(|e| e.to_string())
+}
+
+/// The C build's profile, if it was ever used on this machine:
+/// `%APPDATA%\Henry++\simplewall\profile.xml`.
+pub fn original_profile_path() -> Option<PathBuf> {
+    let appdata = std::env::var_os("APPDATA")?;
+    let path = PathBuf::from(appdata).join("Henry++").join("simplewall").join("profile.xml");
+    path.exists().then_some(path)
+}
+
+/// True when this port has never saved a profile on this machine.
+pub fn is_first_run() -> bool {
+    load_path().is_none()
 }
 
 fn from_user_text(text: Option<&str>) -> Profile {
@@ -38,7 +113,18 @@ pub fn save(profile: &Profile) -> Result<PathBuf, String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    fs::write(&path, write_user(profile)).map_err(|e| e.to_string())?;
+    // Keep a day-old copy to fall back to (IsBackupProfile).
+    let backup = backup_path(&path);
+    let stale = fs::metadata(&backup)
+        .and_then(|m| m.modified())
+        .map_or(true, |t| t.elapsed().unwrap_or_default() >= BACKUP_PERIOD);
+    if stale && path.exists() {
+        let _ = fs::copy(&path, &backup);
+    }
+    // Write beside and rename, so a crash mid-write cannot leave half a profile.
+    let temp = path.with_extension("xml.tmp");
+    fs::write(&temp, write_user(profile)).map_err(|e| e.to_string())?;
+    fs::rename(&temp, &path).map_err(|e| e.to_string())?;
     Ok(path)
 }
 
@@ -113,12 +199,18 @@ fn merge_user(profile: &mut Profile, text: &str) {
             }
             continue;
         }
-        if let Some(existing) = profile
+        // The C build's rules_config has no origin attribute; match any built-in rule by name.
+        let index = profile
             .rules
-            .iter_mut()
-            .find(|r| r.name == rule.name && r.origin == rule.origin)
-        {
+            .iter()
+            .position(|r| r.name == rule.name && r.origin == rule.origin)
+            .or_else(|| profile.rules.iter().position(|r| r.name == rule.name && r.origin != RuleOrigin::User));
+        if let Some(existing) = index.map(|i| &mut profile.rules[i]) {
             existing.enabled = rule.enabled;
+            // Apps assigned to a built-in rule, as the C build's rules_config allows.
+            if !rule.apps.is_empty() {
+                existing.apps = rule.apps;
+            }
         }
     }
     profile.apps = parse_apps(text);
@@ -210,6 +302,8 @@ fn rule_from(e: &BytesStart, section: RuleOrigin, internal: bool) -> Option<Rule
             "apps" => rule.apps = split_apps(&val),
             "is_services" | "services" => rule.services = is_true(&val),
             "is_kernel" | "kernel" => rule.kernel = is_true(&val),
+            // The C build marks block rules with is_block instead of action.
+            "is_block" if !internal && is_true(&val) => rule.action = RuleAction::Block,
             "action" if !internal => {
                 rule.action = if val.eq_ignore_ascii_case("block") {
                     RuleAction::Block
@@ -259,17 +353,21 @@ fn parse_apps(text: &str) -> Vec<AppItem> {
 fn app_from(e: &BytesStart) -> Option<AppItem> {
     let mut app = AppItem::new(String::new(), String::new(), AppKind::Regular);
     app.added = 0;
+    let mut kind_set = false;
+    // Attribute names of this port, and of the C build's profile (is_enabled,
+    // is_silent, is_undeletable, timestamp) for imports.
     for (key, val) in attrs(e) {
         match key.as_str() {
             "path" => app.path = val,
             "name" => app.display_name = val,
-            "enabled" => app.enabled = is_true(&val),
+            "enabled" | "is_enabled" => app.enabled = is_true(&val),
             "timer" => app.timer_until = val.parse().unwrap_or(0),
             "comment" => app.comment = val,
-            "pinned" => app.pinned = is_true(&val),
-            "silent" => app.silent = is_true(&val),
-            "added" => app.added = val.parse().unwrap_or(0),
+            "pinned" | "is_undeletable" => app.pinned = is_true(&val),
+            "silent" | "is_silent" => app.silent = is_true(&val),
+            "added" | "timestamp" => app.added = val.parse().unwrap_or(0),
             "kind" => {
+                kind_set = true;
                 app.kind = match val.as_str() {
                     "service" => AppKind::Service,
                     "system" => AppKind::System,
@@ -282,6 +380,17 @@ fn app_from(e: &BytesStart) -> Option<AppItem> {
     }
     if app.path.is_empty() {
         return None;
+    }
+    if !kind_set {
+        app.kind = kind_of_path(&app.path);
+        if app.kind == AppKind::Regular {
+            app.path = crate::apps::expand_env(&app.path);
+        }
+    }
+    // A timer that ran out while the program was closed.
+    if app.timer_until != 0 && app.timer_until <= crate::model::now_unix() {
+        app.timer_until = 0;
+        app.enabled = false;
     }
     // Earlier builds keyed kernel traffic on ntoskrnl.exe. WFP calls it "System".
     if app.kind == AppKind::System {
@@ -356,15 +465,18 @@ fn write_user(profile: &Profile) -> String {
     xml.push_str("\t</rules_user>\n\t<rules_config>\n");
     let defaults = default_rules(&profile.settings);
     for rule in profile.rules.iter().filter(|r| r.origin != RuleOrigin::User) {
-        let default = defaults
-            .iter()
-            .find(|d| d.origin == rule.origin && d.name == rule.name)
-            .map(|d| d.enabled);
-        if default == Some(rule.enabled) {
+        let default = defaults.iter().find(|d| d.origin == rule.origin && d.name == rule.name);
+        if default.is_some_and(|d| d.enabled == rule.enabled && d.apps == rule.apps) {
             continue;
         }
+        let apps_changed = default.is_none_or(|d| d.apps != rule.apps);
+        let apps = if apps_changed && !rule.apps.is_empty() {
+            format!(" apps=\"{}\"", esc(&rule.apps.join("|")))
+        } else {
+            String::new()
+        };
         xml.push_str(&format!(
-            "\t\t<item name=\"{}\" origin=\"{}\" is_enabled=\"{}\" />\n",
+            "\t\t<item name=\"{}\" origin=\"{}\" is_enabled=\"{}\"{apps} />\n",
             esc(&rule.name),
             origin_attr(rule.origin),
             bool_attr(rule.enabled)
@@ -388,6 +500,20 @@ fn rule_item(rule: &Rule) -> String {
         bool_attr(rule.services),
         bool_attr(rule.kernel)
     )
+}
+
+/// The C build's profile does not store a kind: it is "System", a package SID,
+/// a service name (no backslash), or a file path.
+fn kind_of_path(path: &str) -> AppKind {
+    if path.eq_ignore_ascii_case(SYSTEM_APP) {
+        AppKind::System
+    } else if path.to_ascii_uppercase().starts_with("S-1-15-") {
+        AppKind::Uwp
+    } else if !path.contains('\\') && !path.contains('/') {
+        AppKind::Service
+    } else {
+        AppKind::Regular
+    }
 }
 
 fn split_apps(raw: &str) -> Vec<String> {
@@ -494,6 +620,49 @@ mod tests {
         dns.enabled = false;
         let loaded = from_user_text(Some(&write_user(&profile)));
         assert!(!loaded.rules.iter().find(|r| r.name == "DNS").unwrap().enabled);
+    }
+
+    #[test]
+    fn imports_the_c_build_profile() {
+        let text = r#"<?xml version="1.0" encoding="utf-8"?>
+<root timestamp="1" type="3" version="5">
+	<apps>
+		<item path="%SystemRoot%\system32\notepad.exe" timestamp="1700000000" is_enabled="true" is_silent="true" comment="hi" />
+		<item path="System" is_enabled="true" />
+		<item path="wuauserv" is_enabled="true" />
+	</apps>
+	<rules_custom>
+		<item name="Web" rule="443" dir="0" protocol="6" apps="C:\a.exe" is_block="true" is_enabled="true" />
+	</rules_custom>
+	<rules_config>
+		<item name="DNS" is_enabled="false" apps="C:\dns.exe" />
+	</rules_config>
+</root>"#;
+        let mut profile = Profile::default();
+        let result = import(&mut profile, text.as_bytes()).unwrap();
+        assert!(result.from_original);
+        assert_eq!((result.apps, result.rules), (3, 1));
+
+        let notepad = &profile.apps[0];
+        assert_eq!(notepad.kind, AppKind::Regular);
+        assert!(!notepad.path.contains('%') && notepad.path.to_lowercase().ends_with(r"\system32\notepad.exe"));
+        assert!(notepad.enabled && notepad.silent);
+        assert_eq!((notepad.added, notepad.comment.as_str()), (1_700_000_000, "hi"));
+        assert_eq!(profile.apps[1].kind, AppKind::System);
+        assert_eq!(profile.apps[2].kind, AppKind::Service);
+
+        let web = profile.rules.iter().find(|r| r.name == "Web").unwrap();
+        assert_eq!((web.origin, web.action, web.protocol), (RuleOrigin::User, RuleAction::Block, 6));
+        assert_eq!(web.apps, vec![r"C:\a.exe".to_string()]);
+        assert!(!web.readonly);
+
+        let dns = |p: &Profile| p.rules.iter().find(|r| r.name == "DNS" && r.origin != RuleOrigin::User).cloned().unwrap();
+        assert!(!dns(&profile).enabled);
+        assert_eq!(dns(&profile).apps, vec![r"C:\dns.exe".to_string()]);
+        // The override, with its apps, survives this port's own save and load.
+        let again = from_user_text(Some(&write_user(&profile)));
+        assert_eq!(dns(&again).apps, dns(&profile).apps);
+        assert!(!dns(&again).enabled);
     }
 
     #[test]

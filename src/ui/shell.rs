@@ -64,6 +64,46 @@ pub fn pick_executable() -> Option<String> {
     unsafe { GetOpenFileNameW(&mut ofn).as_bool() }.then(|| utf16_prefix(&file))
 }
 
+const PROFILE_FILTER: &str = "Profile files (*.xml)\0*.xml\0All files (*.*)\0*.*\0";
+
+/// "Open" dialog for a profile to import.
+pub fn pick_profile_to_open() -> Option<String> {
+    let filter = wide(PROFILE_FILTER);
+    let mut file = vec![0u16; 4096];
+    let mut ofn = OPENFILENAMEW {
+        lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
+        hwndOwner: unsafe { GetForegroundWindow() },
+        lpstrFilter: PCWSTR(filter.as_ptr()),
+        lpstrFile: PWSTR(file.as_mut_ptr()),
+        nMaxFile: file.len() as u32,
+        Flags: OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR,
+        ..Default::default()
+    };
+    unsafe { GetOpenFileNameW(&mut ofn).as_bool() }.then(|| utf16_prefix(&file))
+}
+
+/// "Save as" dialog for exporting the profile.
+pub fn pick_profile_to_save() -> Option<String> {
+    use windows::Win32::UI::Controls::Dialogs::{GetSaveFileNameW, OFN_OVERWRITEPROMPT};
+    let filter = wide(PROFILE_FILTER);
+    let extension = wide("xml");
+    let mut file = vec![0u16; 4096];
+    for (slot, ch) in file.iter_mut().zip("profile.xml".encode_utf16()) {
+        *slot = ch;
+    }
+    let mut ofn = OPENFILENAMEW {
+        lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
+        hwndOwner: unsafe { GetForegroundWindow() },
+        lpstrFilter: PCWSTR(filter.as_ptr()),
+        lpstrFile: PWSTR(file.as_mut_ptr()),
+        nMaxFile: file.len() as u32,
+        lpstrDefExt: PCWSTR(extension.as_ptr()),
+        Flags: OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR,
+        ..Default::default()
+    };
+    unsafe { GetSaveFileNameW(&mut ofn).as_bool() }.then(|| utf16_prefix(&file))
+}
+
 /// Open a URL or document with its default handler.
 pub fn open(target: &str) {
     let op = wide("open");

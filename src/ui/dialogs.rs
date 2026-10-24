@@ -214,7 +214,8 @@ pub fn rule_editor(ctx: &egui::Context, draft: &mut RuleDraft, profile: &Profile
                 .color(theme::TEXT_MUTED),
         );
         ui.add_space(4.0);
-        app_checklist(ui, &mut draft.rule, profile, &draft.app_filter, readonly);
+        // Built-in rules keep their addresses, but apps can be assigned, as in the C build.
+        app_checklist(ui, &mut draft.rule, profile, &draft.app_filter, false);
 
         ui.add_space(8.0);
         ui.checkbox(&mut draft.rule.enabled, "Enable this rule");

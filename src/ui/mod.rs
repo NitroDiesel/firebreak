@@ -163,6 +163,8 @@ pub struct SimplewallApp {
     start_minimized: bool,
     /// Task Scheduler state, read when Settings first opens.
     startup: Option<dialogs::Startup>,
+    /// Always-on-top state last sent to the window.
+    on_top: bool,
     /// Running elevated; needed for event subscriptions.
     admin: bool,
     /// Live dropped-connection events, while notifications or a log need them.
@@ -183,11 +185,21 @@ impl SimplewallApp {
         let ctx = &cc.egui_ctx;
         let accent = theme::accent();
         theme::apply(ctx, accent);
+        let first_run = profile::is_first_run();
         let mut profile = profile::load();
-        profile.apps = apps::merge(&profile.apps, apps::enumerate());
-        if profile.settings.always_on_top {
-            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::AlwaysOnTop));
+        // Bring over the C build's apps and rules the first time this port runs.
+        let mut first_notice = None;
+        if let Some(path) = first_run.then(profile::original_profile_path).flatten() {
+            if let Ok(found) = std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| profile::import(&mut profile, &b)) {
+                first_notice = Some(format!(
+                    "Imported {} apps and {} user rules from {}.",
+                    found.apps,
+                    found.rules,
+                    path.display()
+                ));
+            }
         }
+        profile.apps = apps::merge(&profile.apps, apps::enumerate());
         let filters_on = wfp::filters_installed().unwrap_or(false);
         let sort = Sort { column: 0, descending: false };
         let start_minimized = minimized || profile.settings.start_minimized;
@@ -229,6 +241,7 @@ impl SimplewallApp {
             in_tray: false,
             start_minimized,
             startup: None,
+            on_top: false,
             admin: wfp::is_admin(),
             events: None,
             events_tx,
@@ -241,6 +254,9 @@ impl SimplewallApp {
         // Packets log sorts newest first, as in the C build.
         app.sorts[Tab::Packets.index()] = Sort { column: 1, descending: true };
         app.save();
+        if let Some(text) = first_notice {
+            app.notify(text, false);
+        }
         app
     }
 
@@ -780,6 +796,45 @@ impl SimplewallApp {
         }
     }
 
+    /// File > Import: this port's profile or the C build's (plain, compressed, or
+    /// encrypted). The current profile is kept as profile.before-import.xml.
+    fn import_profile(&mut self) {
+        let Some(path) = shell::pick_profile_to_open() else {
+            return;
+        };
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(err) => return self.notify(format!("Could not read {path}: {err}"), true),
+        };
+        if let Some(saved) = profile::user_path() {
+            let _ = profile::export(&self.profile, &saved.with_file_name("profile.before-import.xml"));
+        }
+        match profile::import(&mut self.profile, &bytes) {
+            Ok(found) => {
+                self.profile.apps = apps::merge(&self.profile.apps, apps::enumerate());
+                self.clear_app_selection();
+                self.clear_rule_selection();
+                let source = if found.from_original { "simplewall" } else { "this program" };
+                self.notify(
+                    format!("Imported {} apps and {} user rules from a {source} profile.", found.apps, found.rules),
+                    false,
+                );
+                self.changed();
+            }
+            Err(err) => self.notify(err, true),
+        }
+    }
+
+    fn export_profile(&mut self) {
+        let Some(path) = shell::pick_profile_to_save() else {
+            return;
+        };
+        match profile::export(&self.profile, std::path::Path::new(&path)) {
+            Ok(()) => self.notify(format!("Exported the profile to {path}."), false),
+            Err(err) => self.notify(format!("Could not write {path}: {err}"), true),
+        }
+    }
+
     fn purge_unused(&mut self) {
         let before = self.profile.apps.len();
         let keep: Vec<bool> = self.profile.apps.iter().map(|a| !self.profile.app_is_unused(a)).collect();
@@ -1040,6 +1095,15 @@ impl SimplewallApp {
                             self.dialog = Some(Dialog::Settings);
                         }
                         ui.separator();
+                        if ui.button("Import profile\u{2026}").clicked() {
+                            ui.close_menu();
+                            self.import_profile();
+                        }
+                        if ui.button("Export profile\u{2026}").clicked() {
+                            ui.close_menu();
+                            self.export_profile();
+                        }
+                        ui.separator();
                         if ui.button("Exit").clicked() {
                             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                         }
@@ -1065,17 +1129,8 @@ impl SimplewallApp {
                     });
                     ui.menu_button("View", |ui| {
                         let s = &mut self.profile.settings;
-                        let mut save = false;
-                        if ui.checkbox(&mut s.always_on_top, "Always on top").changed() {
-                            let level = if s.always_on_top {
-                                egui::WindowLevel::AlwaysOnTop
-                            } else {
-                                egui::WindowLevel::Normal
-                            };
-                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
-                            save = true;
-                        }
-                        save |= ui.checkbox(&mut s.show_filenames_only, "Show filenames only").changed();
+                        let mut save = ui.checkbox(&mut s.always_on_top, "Always on top").changed();
+                        save |=ui.checkbox(&mut s.show_filenames_only, "Show filenames only").changed();
                         if save {
                             self.save();
                             self.dirty = true;
@@ -1591,14 +1646,6 @@ impl SimplewallApp {
                         self.profile.apply_blocklist(group);
                     }
                 }
-                if before.always_on_top != self.profile.settings.always_on_top {
-                    let level = if self.profile.settings.always_on_top {
-                        egui::WindowLevel::AlwaysOnTop
-                    } else {
-                        egui::WindowLevel::Normal
-                    };
-                    ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
-                }
                 effect
             }
             Dialog::About => dialogs::about(ctx, &self.icons.logo),
@@ -1666,6 +1713,11 @@ impl eframe::App for SimplewallApp {
         self.handle_tray(ctx);
         self.sync_tray(ctx);
         self.sync_events(ctx);
+        if self.on_top != self.profile.settings.always_on_top {
+            self.on_top = self.profile.settings.always_on_top;
+            let level = if self.on_top { egui::WindowLevel::AlwaysOnTop } else { egui::WindowLevel::Normal };
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
+        }
         self.drain_events();
         self.guard_close(ctx);
         self.shortcuts(ctx);

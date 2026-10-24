@@ -12,6 +12,7 @@ mod model;
 mod netevents;
 mod profile;
 mod rules;
+mod swc;
 mod tray;
 mod ui;
 mod wfp;
