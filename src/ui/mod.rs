@@ -32,6 +32,8 @@ const FIND_ID: &str = "find";
 const NOTICE_SECONDS: u64 = 6;
 const TAB_SLIDE: f64 = 0.2;
 const HOVER_FADE: f32 = 0.12;
+/// Right padding inside the search box, where the magnifier or clear button sits.
+const SEARCH_ICON_GUTTER: f32 = 32.0;
 
 enum Job {
     Install { seq: u64, profile: Box<Profile>, temporary: bool },
@@ -806,9 +808,11 @@ impl SimplewallApp {
             .id(Id::new(FIND_ID))
             .hint_text("Find... (Ctrl+F)")
             .desired_width(260.0)
-            .margin(Margin { left: 10, right: 30, top: 6, bottom: 6 });
+            .margin(Margin { left: 10, right: SEARCH_ICON_GUTTER as i8, top: 6, bottom: 6 });
         let response = ui.add(edit);
-        let center = pos2(response.rect.right() - 16.0, response.rect.center().y);
+        // The response rect excludes the margins; the frame does not.
+        let frame_right = response.rect.right() + SEARCH_ICON_GUTTER;
+        let center = pos2(frame_right - SEARCH_ICON_GUTTER / 2.0, response.rect.center().y);
         if self.query.is_empty() {
             // Magnifier, drawn so it takes the text color.
             let color = if response.has_focus() { theme::TEXT } else { theme::TEXT_MUTED };
@@ -851,12 +855,22 @@ impl SimplewallApp {
                 let bar = ui
                     .horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
-                        for tab in Tab::ALL {
+                        let galleys: Vec<_> = Tab::ALL
+                            .iter()
+                            .map(|tab| {
+                                let font = FontId::proportional(13.0);
+                                ui.painter().layout_no_wrap(tab.label().into(), font, theme::TEXT)
+                            })
+                            .collect();
+                        // Tighten the padding so all eight tabs fit at the minimum window width.
+                        let text: f32 = galleys.iter().map(|g| g.size().x).sum();
+                        let spacing = ui.spacing().item_spacing.x * (Tab::ALL.len() - 1) as f32;
+                        let room = (ui.available_width() - text - spacing) / Tab::ALL.len() as f32;
+                        let padding = room.clamp(10.0, 26.0);
+                        for (tab, galley) in Tab::ALL.into_iter().zip(galleys) {
                             let selected = tab == self.tab;
-                            let font = FontId::proportional(13.0);
-                            let galley = ui.painter().layout_no_wrap(tab.label().into(), font, theme::TEXT);
                             let (rect, response) =
-                                ui.allocate_exact_size(vec2(galley.size().x + 26.0, 34.0), Sense::click());
+                                ui.allocate_exact_size(vec2(galley.size().x + padding, 34.0), Sense::click());
                             let hover = ui.ctx().animate_bool_with_time(response.id, response.hovered(), HOVER_FADE);
                             if hover > 0.0 && !selected {
                                 let fill = Color32::from_white_alpha((10.0 * hover) as u8);
@@ -868,9 +882,11 @@ impl SimplewallApp {
                                 lerp_color(theme::TEXT_MUTED, theme::TEXT, hover)
                             };
                             let pos = rect.center() - galley.size() / 2.0;
+                            // The underline spans the label plus 3px on each side.
+                            let label = Rangef::new(pos.x - 3.0, pos.x + galley.size().x + 3.0);
                             ui.painter().galley(pos, galley, color);
                             if selected {
-                                active = Some(rect.shrink2(vec2(10.0, 0.0)).x_range());
+                                active = Some(label);
                             }
                             if response.clicked() {
                                 clicked = Some(tab);

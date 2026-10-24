@@ -297,10 +297,41 @@ impl List<'_> {
     }
 }
 
+/// The fill column gets what is left. In a narrow window the fixed columns
+/// shrink together so every column stays on screen.
 fn column_widths(columns: &[Column], full: f32) -> Vec<f32> {
+    const MIN_FILL: f32 = 140.0;
     let fixed: f32 = columns.iter().map(|c| c.width).sum();
-    let fill = (full - fixed).max(160.0);
-    columns.iter().map(|c| if c.width == 0.0 { fill } else { c.width }).collect()
+    let scale = if fixed > 0.0 && full - fixed < MIN_FILL {
+        ((full - MIN_FILL) / fixed).clamp(0.4, 1.0)
+    } else {
+        1.0
+    };
+    let fill = (full - fixed * scale).max(MIN_FILL);
+    columns
+        .iter()
+        .map(|c| if c.width == 0.0 { fill } else { c.width * scale })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn col(width: f32) -> Column {
+        Column { title: "", width, right: false }
+    }
+
+    #[test]
+    fn narrow_lists_keep_every_column_on_screen() {
+        let columns = [col(0.0), col(160.0), col(180.0), col(180.0), col(80.0), col(90.0)];
+        let widths = column_widths(&columns, 640.0);
+        assert!((widths.iter().sum::<f32>() - 640.0).abs() < 0.5);
+        assert!(widths[0] >= 140.0);
+        let wide = column_widths(&columns, 1200.0);
+        assert_eq!(wide[1], 160.0);
+        assert_eq!(wide[0], 1200.0 - 690.0);
+    }
 }
 
 fn single_line(painter: &Painter, text: &str, font: FontId, color: Color32, width: f32) -> Arc<Galley> {
