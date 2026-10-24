@@ -263,15 +263,18 @@ fn apps(kind: AppKind, src: &Source) -> Vec<Entry> {
             .then(|| src.signers.get(&app.path.to_lowercase()).cloned())
             .flatten();
         // Same order as `_app_getappcolor`: invalid, connection, signed, undeletable, system.
-        let fill = if !exists {
+        let h = &profile.settings;
+        let fill = if !h.highlighting {
+            None
+        } else if h.highlight_invalid && !exists {
             Some(theme::FILL_INVALID)
-        } else if src.connected.contains(&app.path.to_lowercase()) {
+        } else if h.highlight_connection && src.connected.contains(&app.path.to_lowercase()) {
             Some(theme::FILL_CONNECTION)
-        } else if matches!(signer, Some(Some(_))) {
+        } else if h.highlight_signed && matches!(signer, Some(Some(_))) {
             Some(theme::FILL_SIGNED)
-        } else if app.pinned {
+        } else if h.highlight_undelete && app.pinned {
             Some(theme::FILL_UNDELETE)
-        } else if system {
+        } else if h.highlight_system && system {
             Some(theme::FILL_SYSTEM)
         } else {
             None
@@ -351,9 +354,12 @@ fn rules(origin: RuleOrigin, src: &Source) -> Vec<Entry> {
             continue;
         }
         let valid = rule.is_valid();
-        let fill = if rule.enabled && !valid {
+        let h = &src.profile.settings;
+        let fill = if !h.highlighting {
+            None
+        } else if h.highlight_invalid && rule.enabled && !valid {
             Some(theme::FILL_INVALID)
-        } else if rule.for_apps() {
+        } else if h.highlight_special && rule.for_apps() {
             Some(theme::FILL_SPECIAL)
         } else {
             None

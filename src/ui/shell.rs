@@ -252,3 +252,23 @@ pub fn play_alert_sound() {
         let _ = PlaySoundW(PCWSTR(name.as_ptr()), None, SND_ALIAS | SND_ASYNC | SND_NODEFAULT);
     }
 }
+
+/// `AppsUseLightTheme` from Windows' personalization settings.
+pub fn apps_use_light_theme() -> Option<bool> {
+    let key = wide(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+    let name = wide("AppsUseLightTheme");
+    let mut value = 0u32;
+    let mut size = 4u32;
+    let err = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            PCWSTR(key.as_ptr()),
+            PCWSTR(name.as_ptr()),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(&mut value as *mut u32 as *mut _),
+            Some(&mut size),
+        )
+    };
+    err.is_ok().then_some(value != 0)
+}

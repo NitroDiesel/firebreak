@@ -231,6 +231,15 @@ impl SettingValue for u64 {
     }
 }
 
+impl SettingValue for String {
+    fn parse(text: &str) -> Option<Self> {
+        Some(text.to_string())
+    }
+    fn format(&self) -> String {
+        self.clone()
+    }
+}
+
 impl SettingValue for BlocklistState {
     fn parse(text: &str) -> Option<Self> {
         Self::from_attr(text)
@@ -336,6 +345,29 @@ settings! {
     always_on_top: bool = false,
     /// ShowFilenames
     show_filenames_only: bool = true,
+    /// 0 follows Windows, 1 dark, 2 light.
+    theme: u64 = 0,
+    /// IsEnableHighlighting: color list rows at all.
+    highlighting: bool = true,
+    /// IsHighlightInvalid: missing files and rules with errors.
+    highlight_invalid: bool = true,
+    /// IsHighlightSpecial: rules for specific apps.
+    highlight_special: bool = true,
+    /// IsHighlightSigned
+    highlight_signed: bool = true,
+    /// IsHighlightConnection: apps with an active connection.
+    highlight_connection: bool = true,
+    /// IsHighlightSystem: apps in the Windows folder, services, and System.
+    highlight_system: bool = true,
+    /// IsHighlightUndelete: pinned apps.
+    highlight_undelete: bool = true,
+    /// CurrentTab
+    current_tab: u64 = 0,
+    /// Sort column and direction per tab ("column:desc,..."), like SortColumn / SortIsDescending.
+    sorts: String = String::new(),
+    /// Window size in points; 0 means the default.
+    window_width: u64 = 0,
+    window_height: u64 = 0,
 }
 
 impl Settings {

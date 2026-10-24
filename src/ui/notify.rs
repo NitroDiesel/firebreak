@@ -77,8 +77,8 @@ pub struct Alert<'a> {
 pub fn show(ctx: &egui::Context, alert: &Alert, files: &mut FileIcons) -> Action {
     let mut action = Action::None;
     let frame = egui::Frame::NONE
-        .fill(theme::RAISED)
-        .stroke(Stroke::new(1.0_f32, theme::BORDER))
+        .fill(theme::raised())
+        .stroke(Stroke::new(1.0_f32, theme::border()))
         .inner_margin(14);
     egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
         let p = alert.packet;
@@ -99,15 +99,15 @@ pub fn show(ctx: &egui::Context, alert: &Alert, files: &mut FileIcons) -> Action
                 ui.vertical(|ui| {
                     ui.label(RichText::new(&alert.app.display_name).font(theme::semibold(15.0)));
                     let what = format!("Blocked {} connection", p.direction().to_lowercase());
-                    ui.label(RichText::new(what).small().color(theme::TEXT_MUTED));
+                    ui.label(RichText::new(what).small().color(theme::text_muted()));
                 });
                 ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                     let (rect, close) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
                     if close.hovered() {
-                        ui.painter().rect_filled(rect, 4.0, Color32::from_white_alpha(18));
+                        ui.painter().rect_filled(rect, 4.0, theme::overlay(1.1));
                     }
                     let c = rect.center();
-                    let stroke = Stroke::new(1.5_f32, if close.hovered() { theme::TEXT } else { theme::TEXT_MUTED });
+                    let stroke = Stroke::new(1.5_f32, if close.hovered() { theme::text() } else { theme::text_muted() });
                     ui.painter().line_segment([c + vec2(-4.5, -4.5), c + vec2(4.5, 4.5)], stroke);
                     ui.painter().line_segment([c + vec2(-4.5, 4.5), c + vec2(4.5, -4.5)], stroke);
                     if close.on_hover_text("Close").clicked() {
@@ -117,7 +117,7 @@ pub fn show(ctx: &egui::Context, alert: &Alert, files: &mut FileIcons) -> Action
                         ui.label(
                             RichText::new(format!("{}/{}", alert.position + 1, alert.count))
                                 .small()
-                                .color(theme::TEXT_MUTED),
+                                .color(theme::text_muted()),
                         );
                     }
                 });
@@ -135,7 +135,7 @@ pub fn show(ctx: &egui::Context, alert: &Alert, files: &mut FileIcons) -> Action
             .min_col_width(70.0)
             .show(ui, |ui| {
                 let mut row = |label: &str, value: String| {
-                    ui.label(RichText::new(label).color(theme::TEXT_MUTED));
+                    ui.label(RichText::new(label).color(theme::text_muted()));
                     ui.add(egui::Label::new(value).truncate());
                     ui.end_row();
                 };

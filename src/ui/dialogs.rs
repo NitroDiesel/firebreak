@@ -211,7 +211,7 @@ pub fn rule_editor(ctx: &egui::Context, draft: &mut RuleDraft, profile: &Profile
         ui.label(
             RichText::new("If there is no apps selected, then rule will be applied for all apps.")
                 .small()
-                .color(theme::TEXT_MUTED),
+                .color(theme::text_muted()),
         );
         ui.add_space(4.0);
         // Built-in rules keep their addresses, but apps can be assigned, as in the C build.
@@ -225,7 +225,7 @@ pub fn rule_editor(ctx: &egui::Context, draft: &mut RuleDraft, profile: &Profile
         ui.separator();
         ui.horizontal(|ui| {
             if let Some(problem) = &problem {
-                ui.label(RichText::new(problem).color(theme::DANGER));
+                ui.label(RichText::new(problem).color(theme::danger()));
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui.button("Cancel").clicked() {
@@ -251,8 +251,8 @@ pub fn rule_editor(ctx: &egui::Context, draft: &mut RuleDraft, profile: &Profile
 
 fn app_checklist(ui: &mut Ui, rule: &mut Rule, profile: &Profile, filter: &str, readonly: bool) {
     egui::Frame::NONE
-        .fill(theme::SURFACE)
-        .stroke(egui::Stroke::new(1.0_f32, theme::BORDER))
+        .fill(theme::surface())
+        .stroke(egui::Stroke::new(1.0_f32, theme::border()))
         .corner_radius(6)
         .inner_margin(6)
         .show(ui, |ui| {
@@ -328,7 +328,7 @@ pub fn app_properties(ctx: &egui::Context, index: usize, profile: &mut Profile) 
     window("App").open(&mut open).show(ctx, |ui| {
         ui.set_width(480.0);
         ui.label(RichText::new(&app.display_name).font(theme::semibold(16.0)));
-        ui.label(RichText::new(&app.path).small().color(theme::TEXT_MUTED));
+        ui.label(RichText::new(&app.path).small().color(theme::text_muted()));
         ui.add_space(10.0);
 
         let item = &mut profile.apps[index];
@@ -389,14 +389,14 @@ pub fn app_properties(ctx: &egui::Context, index: usize, profile: &mut Profile) 
             .filter(|i| profile.rules[*i].origin == RuleOrigin::User)
             .collect();
         egui::Frame::NONE
-            .fill(theme::SURFACE)
-            .stroke(egui::Stroke::new(1.0_f32, theme::BORDER))
+            .fill(theme::surface())
+            .stroke(egui::Stroke::new(1.0_f32, theme::border()))
             .corner_radius(6)
             .inner_margin(6)
             .show(ui, |ui| {
                 egui::ScrollArea::vertical().max_height(160.0).auto_shrink([false, true]).show(ui, |ui| {
                     if users.is_empty() {
-                        ui.label(RichText::new("No user rules yet.").color(theme::TEXT_MUTED));
+                        ui.label(RichText::new("No user rules yet.").color(theme::text_muted()));
                     }
                     for i in users {
                         let rule = &mut profile.rules[i];
@@ -455,6 +455,7 @@ impl Startup {
 enum Page {
     #[default]
     General,
+    Appearance,
     Filters,
     Blocklist,
     Security,
@@ -464,8 +465,9 @@ enum Page {
 }
 
 impl Page {
-    const ALL: [Page; 7] = [
+    const ALL: [Page; 8] = [
         Page::General,
+        Page::Appearance,
         Page::Filters,
         Page::Blocklist,
         Page::Security,
@@ -477,6 +479,7 @@ impl Page {
     fn label(self) -> &'static str {
         match self {
             Page::General => "General",
+            Page::Appearance => "Appearance",
             Page::Filters => "Filters",
             Page::Blocklist => "Blocklist",
             Page::Security => "Security",
@@ -501,20 +504,27 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                 ui.set_width(140.0);
                 for p in Page::ALL {
                     let selected = page == p;
-                    let text = RichText::new(p.label()).color(if selected { theme::TEXT } else { theme::TEXT_MUTED });
+                    let text = RichText::new(p.label()).color(if selected { theme::text() } else { theme::text_muted() });
                     if ui.add_sized([140.0, 28.0], egui::SelectableLabel::new(selected, text)).clicked() {
                         page = p;
                     }
                 }
             });
-            ui.separator();
+            // A fixed-height divider; ui.separator() here would stretch the window to the screen.
+            let (line, _) = ui.allocate_exact_size(egui::vec2(9.0, 400.0), egui::Sense::hover());
+            ui.painter().vline(line.center().x, line.y_range(), egui::Stroke::new(1.0_f32, theme::border()));
             ui.vertical(|ui| {
                 ui.set_width(450.0);
-                ui.set_min_height(330.0);
                 let s = &mut profile.settings;
                 let mut filters = false;
                 let mut saved = false;
-                match page {
+                // A fixed height, so the window does not jump between pages or outgrow the main window.
+                egui::ScrollArea::vertical()
+                    .id_salt(page.label())
+                    .min_scrolled_height(400.0)
+                    .max_height(400.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match page {
                     Page::General => {
                         section(ui, "Startup");
                         let mut autorun = startup.autorun;
@@ -541,6 +551,33 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                             ui.add_space(10.0);
                             hint(ui, &format!("Profile: {}", path.display()));
                         }
+                    }
+                    Page::Appearance => {
+                        section(ui, "Theme");
+                        ui.horizontal(|ui| {
+                            for (value, label) in [(0, "Same as Windows"), (1, "Dark"), (2, "Light")] {
+                                saved |= ui.radio_value(&mut s.theme, value, label).changed();
+                            }
+                        });
+                        section(ui, "Highlighting");
+                        saved |= ui.checkbox(&mut s.highlighting, "Color list rows").changed();
+                        ui.add_enabled_ui(s.highlighting, |ui| {
+                            let rows: [(&mut bool, &str, Color32); 6] = [
+                                (&mut s.highlight_invalid, "Missing files and rules with errors", theme::FILL_INVALID),
+                                (&mut s.highlight_connection, "Apps with an active connection", theme::FILL_CONNECTION),
+                                (&mut s.highlight_signed, "Signed apps", theme::FILL_SIGNED),
+                                (&mut s.highlight_special, "Rules for specific apps", theme::FILL_SPECIAL),
+                                (&mut s.highlight_undelete, "Pinned apps", theme::FILL_UNDELETE),
+                                (&mut s.highlight_system, "System apps and services", theme::FILL_SYSTEM),
+                            ];
+                            for (value, label, color) in rows {
+                                ui.horizontal(|ui| {
+                                    let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                                    ui.painter().rect_filled(rect, 3.0, color);
+                                    saved |= ui.checkbox(value, label).changed();
+                                });
+                            }
+                        });
                     }
                     Page::Filters => {
                         section(ui, "Allow");
@@ -654,7 +691,7 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                             .changed();
                         hint(ui, &format!("Log file: {}", crate::log::log_path().display()));
                     }
-                }
+                });
                 if filters {
                     effect = Effect::Changed;
                 } else if saved && matches!(effect, Effect::None) {
@@ -677,12 +714,12 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
 }
 
 fn hint(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).small().color(theme::TEXT_MUTED));
+    ui.label(RichText::new(text).small().color(theme::text_muted()));
 }
 
 fn section(ui: &mut Ui, title: &str) {
     ui.add_space(6.0);
-    ui.label(RichText::new(title).font(theme::semibold(13.0)).color(theme::TEXT));
+    ui.label(RichText::new(title).font(theme::semibold(13.0)).color(theme::text()));
     ui.add_space(2.0);
 }
 
@@ -695,8 +732,8 @@ pub fn about(ctx: &egui::Context, logo: &egui::TextureHandle) -> Effect {
             ui.add(egui::Image::new((logo.id(), egui::vec2(48.0, 48.0))));
             ui.vertical(|ui| {
                 ui.label(RichText::new(format!("{APP_NAME} {APP_VERSION}")).font(theme::semibold(18.0)));
-                ui.label(RichText::new("Rust port of simplewall by Henry++").color(theme::TEXT_MUTED));
-                ui.label(RichText::new("GNU General Public License v3").small().color(theme::TEXT_MUTED));
+                ui.label(RichText::new("Rust port of simplewall by Henry++").color(theme::text_muted()));
+                ui.label(RichText::new("GNU General Public License v3").small().color(theme::text_muted()));
             });
         });
         ui.add_space(10.0);

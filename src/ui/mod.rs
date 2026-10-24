@@ -167,6 +167,10 @@ pub struct SimplewallApp {
     startup: Option<dialogs::Startup>,
     /// Always-on-top state last sent to the window.
     on_top: bool,
+    /// The theme in use.
+    dark: bool,
+    /// Last size of the restored window, saved on exit.
+    window_size: Option<egui::Vec2>,
     /// Signature and hash checks.
     inspector: inspect::Inspector,
     monitor: monitor::Monitor,
@@ -195,7 +199,6 @@ impl SimplewallApp {
     pub fn new(cc: &eframe::CreationContext<'_>, minimized: bool) -> Self {
         let ctx = &cc.egui_ctx;
         let accent = theme::accent();
-        theme::apply(ctx, accent);
         let first_run = profile::is_first_run();
         let mut profile = profile::load();
         // Bring over the C build's apps and rules the first time this port runs.
@@ -211,6 +214,16 @@ impl SimplewallApp {
             }
         }
         profile.apps = apps::merge(&profile.apps, apps::enumerate());
+        let dark = match profile.settings.theme {
+            1 => true,
+            2 => false,
+            _ => theme::system_is_dark(),
+        };
+        theme::apply(ctx, accent, dark, profile.settings.theme == 0);
+        let (width, height) = (profile.settings.window_width, profile.settings.window_height);
+        if width >= 640 && height >= 400 {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(vec2(width as f32, height as f32)));
+        }
         let filters_on = wfp::filters_installed().unwrap_or(false);
         let sort = Sort { column: 0, descending: false };
         let start_minimized = minimized || profile.settings.start_minimized;
@@ -255,6 +268,8 @@ impl SimplewallApp {
             start_minimized,
             startup: None,
             on_top: false,
+            dark,
+            window_size: None,
             inspector: inspect::Inspector::spawn(ctx.clone()),
             monitor: monitor::Monitor::spawn(ctx.clone(), network_monitor, show_waiting),
             resolver: monitor::Resolver::spawn(ctx.clone()),
@@ -272,6 +287,20 @@ impl SimplewallApp {
         };
         // Packets log sorts newest first, as in the C build.
         app.sorts[Tab::Packets.index()] = Sort { column: 1, descending: true };
+        // Last tab and sort order (CurrentTab, SortColumn, SortIsDescending).
+        for (sort, saved) in app.sorts.iter_mut().zip(app.profile.settings.sorts.split(',')) {
+            if let Some((column, desc)) = saved.split_once(':') {
+                if let Ok(column) = column.parse() {
+                    *sort = Sort { column, descending: desc == "1" };
+                }
+            }
+        }
+        if let Some(tab) = Tab::ALL.get(app.profile.settings.current_tab as usize) {
+            app.tab = *tab;
+        }
+        if app.tab == Tab::Packets {
+            app.load_packets();
+        }
         app.save();
         if let Some(text) = first_notice {
             app.notify(text, false);
@@ -790,6 +819,28 @@ impl SimplewallApp {
         }
     }
 
+    /// Follow the theme setting (and Windows, for "System"), and note the
+    /// window size while it is restored, for next start.
+    fn sync_appearance(&mut self, ctx: &egui::Context) {
+        let theme = self.profile.settings.theme;
+        let dark = match theme {
+            1 => true,
+            2 => false,
+            _ => ctx.system_theme().map_or(self.dark, |t| t == egui::Theme::Dark),
+        };
+        if dark != self.dark {
+            self.dark = dark;
+            theme::set_theme(ctx, self.accent, dark, theme == 0);
+        }
+        let (minimized, maximized, rect) =
+            ctx.input(|i| (i.viewport().minimized, i.viewport().maximized, i.viewport().inner_rect));
+        if minimized != Some(true) && maximized != Some(true) {
+            if let Some(rect) = rect {
+                self.window_size = Some(rect.size());
+            }
+        }
+    }
+
     /// Take the monitor's newest connection table: it refreshes the Connections
     /// tab and the "has a connection" highlight on the app tabs.
     fn sync_connections(&mut self) {
@@ -1207,7 +1258,7 @@ impl SimplewallApp {
 
     fn menu_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("menu")
-            .frame(egui::Frame::NONE.fill(theme::CHROME).inner_margin(Margin::symmetric(6, 2)))
+            .frame(egui::Frame::NONE.fill(theme::chrome()).inner_margin(Margin::symmetric(6, 2)))
             .show_separator_line(false)
             .show(ctx, |ui| {
                 egui::menu::bar(ui, |ui| {
@@ -1317,7 +1368,7 @@ impl SimplewallApp {
 
     fn toolbar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("toolbar")
-            .frame(egui::Frame::NONE.fill(theme::CHROME).inner_margin(Margin::symmetric(6, 4)))
+            .frame(egui::Frame::NONE.fill(theme::chrome()).inner_margin(Margin::symmetric(6, 4)))
             .show_separator_line(false)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -1411,7 +1462,7 @@ impl SimplewallApp {
         let center = pos2(frame_right - SEARCH_ICON_GUTTER / 2.0, response.rect.center().y);
         if self.query.is_empty() {
             // Magnifier, drawn so it takes the text color.
-            let color = if response.has_focus() { theme::TEXT } else { theme::TEXT_MUTED };
+            let color = if response.has_focus() { theme::text() } else { theme::text_muted() };
             let stroke = Stroke::new(1.5_f32, color);
             let lens = center + vec2(-1.5, -1.5);
             ui.painter().circle_stroke(lens, 4.5, stroke);
@@ -1422,7 +1473,7 @@ impl SimplewallApp {
             let clear = ui.interact(rect, Id::new("find_clear"), Sense::click());
             let hover = ui.ctx().animate_bool_with_time(clear.id, clear.hovered(), HOVER_FADE);
             if hover > 0.0 {
-                ui.painter().rect_filled(rect, 4.0, Color32::from_white_alpha((16.0 * hover) as u8));
+                ui.painter().rect_filled(rect, 4.0, theme::overlay(hover));
             }
             let icon = Rect::from_center_size(center, vec2(14.0, 14.0));
             let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
@@ -1443,7 +1494,7 @@ impl SimplewallApp {
 
     fn tabs(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("tabs")
-            .frame(egui::Frame::NONE.fill(theme::CHROME).inner_margin(Margin { left: 6, right: 6, top: 2, bottom: 0 }))
+            .frame(egui::Frame::NONE.fill(theme::chrome()).inner_margin(Margin { left: 6, right: 6, top: 2, bottom: 0 }))
             .show_separator_line(false)
             .show(ctx, |ui| {
                 let mut active = None;
@@ -1455,7 +1506,7 @@ impl SimplewallApp {
                             .iter()
                             .map(|tab| {
                                 let font = FontId::proportional(13.0);
-                                ui.painter().layout_no_wrap(tab.label().into(), font, theme::TEXT)
+                                ui.painter().layout_no_wrap(tab.label().into(), font, theme::text())
                             })
                             .collect();
                         // Tighten the padding so all eight tabs fit at the minimum window width.
@@ -1469,13 +1520,13 @@ impl SimplewallApp {
                                 ui.allocate_exact_size(vec2(galley.size().x + padding, 34.0), Sense::click());
                             let hover = ui.ctx().animate_bool_with_time(response.id, response.hovered(), HOVER_FADE);
                             if hover > 0.0 && !selected {
-                                let fill = Color32::from_white_alpha((10.0 * hover) as u8);
+                                let fill = theme::overlay(0.65 * hover);
                                 ui.painter().rect_filled(rect.shrink2(vec2(0.0, 4.0)), 4.0, fill);
                             }
                             let color = if selected {
-                                theme::TEXT
+                                theme::text()
                             } else {
-                                lerp_color(theme::TEXT_MUTED, theme::TEXT, hover)
+                                lerp_color(theme::text_muted(), theme::text(), hover)
                             };
                             let pos = rect.center() - galley.size() / 2.0;
                             // The underline spans the label plus 3px on each side.
@@ -1494,7 +1545,7 @@ impl SimplewallApp {
                 ui.painter().hline(
                     ui.max_rect().x_range(),
                     bar.bottom() - 0.5,
-                    Stroke::new(1.0_f32, theme::BORDER),
+                    Stroke::new(1.0_f32, theme::border()),
                 );
                 if let Some(target) = active {
                     let drawn = self.slide_underline(ui.ctx(), target);
@@ -1534,14 +1585,14 @@ impl SimplewallApp {
         let (text, color, dot) = self.status_text();
         egui::TopBottomPanel::bottom("status")
             .exact_height(26.0)
-            .frame(egui::Frame::NONE.fill(theme::CHROME).inner_margin(Margin::symmetric(10, 0)))
+            .frame(egui::Frame::NONE.fill(theme::chrome()).inner_margin(Margin::symmetric(10, 0)))
             .show_separator_line(false)
             .show(ctx, |ui| {
                 let full = ui.max_rect();
                 ui.painter().hline(
                     full.x_range().expand(10.0),
                     full.top() + 0.5,
-                    Stroke::new(1.0_f32, theme::BORDER),
+                    Stroke::new(1.0_f32, theme::border()),
                 );
                 let part = 170.0;
                 let first = (full.width() - part * 2.0).max(220.0);
@@ -1556,9 +1607,9 @@ impl SimplewallApp {
                 ];
                 for (i, label) in parts.into_iter().enumerate() {
                     let x = full.left() + first + part * i as f32;
-                    painter.vline(x, full.top() + 6.0..=full.bottom() - 6.0, Stroke::new(1.0_f32, theme::BORDER));
-                    let galley = painter.layout_no_wrap(label, FontId::proportional(12.5), theme::TEXT_MUTED);
-                    painter.galley(pos2(x + 10.0, y - galley.size().y / 2.0), galley, theme::TEXT_MUTED);
+                    painter.vline(x, full.top() + 6.0..=full.bottom() - 6.0, Stroke::new(1.0_f32, theme::border()));
+                    let galley = painter.layout_no_wrap(label, FontId::proportional(12.5), theme::text_muted());
+                    painter.galley(pos2(x + 10.0, y - galley.size().y / 2.0), galley, theme::text_muted());
                 }
             });
     }
@@ -1570,11 +1621,11 @@ impl SimplewallApp {
             }
         }
         if self.worker.busy() {
-            return ("Applying filters\u{2026}".into(), theme::TEXT, self.accent);
+            return ("Applying filters\u{2026}".into(), theme::text(), self.accent);
         }
         if let Some(notice) = &self.notice {
-            let color = if notice.error { theme::DANGER } else { theme::TEXT };
-            return (notice.text.clone(), color, if notice.error { theme::DANGER } else { self.accent });
+            let color = if notice.error { theme::danger() } else { theme::text() };
+            return (notice.text.clone(), color, if notice.error { theme::danger() } else { self.accent });
         }
         if self.filters_on {
             let text = if self.profile.settings.filters_temporary {
@@ -1582,9 +1633,9 @@ impl SimplewallApp {
             } else {
                 "Filters are enabled."
             };
-            (text.into(), theme::TEXT, Color32::from_rgb(0x6C, 0xCB, 0x5F))
+            (text.into(), theme::text(), Color32::from_rgb(0x6C, 0xCB, 0x5F))
         } else {
-            ("Filters are disabled!".into(), theme::TEXT, theme::DANGER)
+            ("Filters are disabled!".into(), theme::text(), theme::danger())
         }
     }
 
@@ -1592,7 +1643,7 @@ impl SimplewallApp {
         let index = self.tab.index();
         let empty = self.empty_text();
         let output = egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(theme::SURFACE))
+            .frame(egui::Frame::NONE.fill(theme::surface()))
             .show(ctx, |ui| {
                 let mut art = list::Art {
                     icons: &self.icons,
@@ -1771,9 +1822,7 @@ impl SimplewallApp {
                 let startup = self.startup.get_or_insert_with(dialogs::Startup::read);
                 let effect = dialogs::settings(ctx, &mut self.profile, startup);
                 let after = &self.profile.settings;
-                if before.show_filenames_only != after.show_filenames_only
-                    || before.check_signatures != after.check_signatures
-                {
+                if before != *after {
                     self.dirty = true;
                 }
                 if before.check_revocation != after.check_revocation {
@@ -1846,6 +1895,22 @@ impl SimplewallApp {
 }
 
 impl eframe::App for SimplewallApp {
+    /// Remember the tab, sort orders, and window size for next time.
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        let s = &mut self.profile.settings;
+        s.current_tab = self.tab.index() as u64;
+        s.sorts = self
+            .sorts
+            .iter()
+            .map(|sort| format!("{}:{}", sort.column, u8::from(sort.descending)))
+            .collect::<Vec<_>>()
+            .join(",");
+        if let Some(size) = self.window_size {
+            (s.window_width, s.window_height) = (size.x.round() as u64, size.y.round() as u64);
+        }
+        let _ = profile::save(&self.profile);
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_worker();
         self.tick_timers(ctx);
@@ -1863,6 +1928,7 @@ impl eframe::App for SimplewallApp {
         }
         self.check_file_hashes(ctx);
         self.sync_connections();
+        self.sync_appearance(ctx);
         self.guard_close(ctx);
         self.shortcuts(ctx);
         if self.dirty {
@@ -1887,7 +1953,7 @@ impl eframe::App for SimplewallApp {
 /// Toolbar button: 20px icon, optional label, hover fade, 0.96 press scale.
 fn tool_button(ui: &mut Ui, icon: &TextureHandle, label: Option<&str>, tip: &str, checked: bool, accent: Color32) -> Response {
     let font = FontId::proportional(13.0);
-    let galley = label.map(|l| ui.painter().layout_no_wrap(l.into(), font, theme::TEXT));
+    let galley = label.map(|l| ui.painter().layout_no_wrap(l.into(), font, theme::text()));
     let width = 10.0 + 20.0 + galley.as_ref().map_or(0.0, |g| 8.0 + g.size().x) + 10.0;
     let (rect, response) = ui.allocate_exact_size(vec2(width, 34.0), Sense::click());
     let hover = ui.ctx().animate_bool_with_time(response.id, response.hovered(), HOVER_FADE);
@@ -1899,7 +1965,7 @@ fn tool_button(ui: &mut Ui, icon: &TextureHandle, label: Option<&str>, tip: &str
         painter.rect_stroke(body, 5.0, Stroke::new(1.0_f32, accent.gamma_multiply(0.55)), egui::StrokeKind::Inside);
     }
     if hover > 0.0 {
-        painter.rect_filled(body, 5.0, Color32::from_white_alpha((14.0 * hover) as u8));
+        painter.rect_filled(body, 5.0, theme::overlay(0.9 * hover));
     }
     let icon_size = 20.0 * scale;
     let icon_left = body.left() + 10.0 * scale;
@@ -1907,14 +1973,14 @@ fn tool_button(ui: &mut Ui, icon: &TextureHandle, label: Option<&str>, tip: &str
     painter.image(icon.id(), icon_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     if let Some(galley) = galley {
         let pos = pos2(icon_rect.right() + 8.0, body.center().y - galley.size().y / 2.0);
-        painter.galley(pos, galley, theme::TEXT);
+        painter.galley(pos, galley, theme::text());
     }
     response.on_hover_text(tip)
 }
 
 fn tool_separator(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(vec2(11.0, 34.0), Sense::hover());
-    ui.painter().vline(rect.center().x, rect.top() + 8.0..=rect.bottom() - 8.0, Stroke::new(1.0_f32, theme::BORDER));
+    ui.painter().vline(rect.center().x, rect.top() + 8.0..=rect.bottom() - 8.0, Stroke::new(1.0_f32, theme::border()));
 }
 
 fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {

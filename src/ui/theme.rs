@@ -1,6 +1,8 @@
 //! Palette, fonts, and bundled icons. One accent (the Windows accent color),
-//! one neutral gray family, and the original list highlight colors.
+//! one neutral gray family in a dark and a light version, and the original
+//! list highlight colors, which are the same in both.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use eframe::egui::{
@@ -8,19 +10,116 @@ use eframe::egui::{
     TextStyle, TextureHandle, TextureOptions, Vec2,
 };
 
-/// Menu bar, toolbar, tabs, and status bar.
-pub const CHROME: Color32 = Color32::from_rgb(0x20, 0x20, 0x20);
-/// List body.
-pub const SURFACE: Color32 = Color32::from_rgb(0x19, 0x19, 0x19);
-/// Dialogs and popups.
-pub const RAISED: Color32 = Color32::from_rgb(0x2B, 0x2B, 0x2B);
-pub const BORDER: Color32 = Color32::from_rgb(0x33, 0x33, 0x33);
-pub const TEXT: Color32 = Color32::from_rgb(0xE6, 0xE6, 0xE6);
-pub const TEXT_MUTED: Color32 = Color32::from_rgb(0x9D, 0x9D, 0x9D);
+/// The neutral colors of one theme.
+struct Palette {
+    /// Menu bar, toolbar, tabs, and status bar.
+    chrome: Color32,
+    /// List body.
+    surface: Color32,
+    /// Dialogs and popups.
+    raised: Color32,
+    border: Color32,
+    text: Color32,
+    text_muted: Color32,
+    danger: Color32,
+    /// Button faces: rest, hover, pressed.
+    faces: [Color32; 3],
+    /// Checkbox and radio wells: rest, hover.
+    wells: [Color32; 2],
+    well_edge: Color32,
+}
+
+const DARK: Palette = Palette {
+    chrome: Color32::from_rgb(0x20, 0x20, 0x20),
+    surface: Color32::from_rgb(0x19, 0x19, 0x19),
+    raised: Color32::from_rgb(0x2B, 0x2B, 0x2B),
+    border: Color32::from_rgb(0x33, 0x33, 0x33),
+    text: Color32::from_rgb(0xE6, 0xE6, 0xE6),
+    text_muted: Color32::from_rgb(0x9D, 0x9D, 0x9D),
+    danger: Color32::from_rgb(0xFF, 0x7C, 0x94),
+    faces: [
+        Color32::from_rgb(0x2D, 0x2D, 0x2D),
+        Color32::from_rgb(0x37, 0x37, 0x37),
+        Color32::from_rgb(0x41, 0x41, 0x41),
+    ],
+    wells: [Color32::from_rgb(0x3A, 0x3A, 0x3A), Color32::from_rgb(0x45, 0x45, 0x45)],
+    well_edge: Color32::from_rgb(0x55, 0x55, 0x55),
+};
+
+const LIGHT: Palette = Palette {
+    chrome: Color32::from_rgb(0xF3, 0xF3, 0xF3),
+    surface: Color32::from_rgb(0xFF, 0xFF, 0xFF),
+    raised: Color32::from_rgb(0xFB, 0xFB, 0xFB),
+    border: Color32::from_rgb(0xE0, 0xE0, 0xE0),
+    text: Color32::from_rgb(0x1B, 0x1B, 0x1B),
+    text_muted: Color32::from_rgb(0x5F, 0x5F, 0x5F),
+    danger: Color32::from_rgb(0xC4, 0x2B, 0x1C),
+    faces: [
+        Color32::from_rgb(0xFB, 0xFB, 0xFB),
+        Color32::from_rgb(0xF0, 0xF0, 0xF0),
+        Color32::from_rgb(0xE6, 0xE6, 0xE6),
+    ],
+    wells: [Color32::from_rgb(0xFF, 0xFF, 0xFF), Color32::from_rgb(0xF3, 0xF3, 0xF3)],
+    well_edge: Color32::from_rgb(0x8A, 0x8A, 0x8A),
+};
+
+static IS_DARK: AtomicBool = AtomicBool::new(true);
+
+fn palette() -> &'static Palette {
+    if IS_DARK.load(Ordering::Relaxed) {
+        &DARK
+    } else {
+        &LIGHT
+    }
+}
+
+pub fn is_dark() -> bool {
+    IS_DARK.load(Ordering::Relaxed)
+}
+
+pub fn chrome() -> Color32 {
+    palette().chrome
+}
+pub fn surface() -> Color32 {
+    palette().surface
+}
+pub fn raised() -> Color32 {
+    palette().raised
+}
+pub fn border() -> Color32 {
+    palette().border
+}
+pub fn text() -> Color32 {
+    palette().text
+}
+pub fn text_muted() -> Color32 {
+    palette().text_muted
+}
+pub fn danger() -> Color32 {
+    palette().danger
+}
+/// Hover wash over chrome or the list.
+pub fn hover() -> Color32 {
+    overlay(1.0)
+}
+
+/// A wash that darkens light surfaces and lightens dark ones; `strength` 1.0
+/// is the list hover.
+pub fn overlay(strength: f32) -> Color32 {
+    if is_dark() {
+        Color32::from_white_alpha((16.0 * strength).clamp(0.0, 255.0) as u8)
+    } else {
+        Color32::from_black_alpha((12.0 * strength).clamp(0.0, 255.0) as u8)
+    }
+}
+
+/// Unchecked checkbox in a list row: (well, edge).
+pub fn check_well() -> (Color32, Color32) {
+    (palette().wells[0], palette().well_edge)
+}
+
 /// Text on a highlighted (pastel) row.
 pub const TEXT_ON_FILL: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
-pub const HOVER: Color32 = Color32::from_rgba_premultiplied(0x10, 0x10, 0x10, 0x10);
-pub const DANGER: Color32 = Color32::from_rgb(0xFF, 0x7C, 0x94);
 
 /// Row highlights, same values as `LV_COLOR_*` in the C build.
 pub const FILL_INVALID: Color32 = Color32::from_rgb(0xFF, 0x7C, 0x94);
@@ -53,61 +152,10 @@ pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(SEMIBOLD.into()))
 }
 
-pub fn apply(ctx: &egui::Context, accent: Color32) {
+/// Fonts are loaded once; `set_theme` can run again when the theme changes.
+pub fn apply(ctx: &egui::Context, accent: Color32, dark: bool, follow_system: bool) {
     install_fonts(ctx);
-
-    let mut visuals = egui::Visuals::dark();
-    visuals.panel_fill = CHROME;
-    visuals.window_fill = RAISED;
-    visuals.extreme_bg_color = SURFACE;
-    visuals.faint_bg_color = Color32::from_rgb(0x1E, 0x1E, 0x1E);
-    visuals.code_bg_color = SURFACE;
-    visuals.hyperlink_color = accent;
-    visuals.selection.bg_fill = accent.gamma_multiply(0.45);
-    visuals.selection.stroke = Stroke::new(1.0_f32, TEXT);
-    visuals.window_stroke = Stroke::new(1.0_f32, BORDER);
-    visuals.window_corner_radius = CornerRadius::same(8);
-    visuals.menu_corner_radius = CornerRadius::same(6);
-    let shadow = Shadow {
-        offset: [0, 4],
-        blur: 16,
-        spread: 0,
-        color: Color32::from_black_alpha(110),
-    };
-    visuals.window_shadow = shadow;
-    visuals.popup_shadow = shadow;
-    visuals.indent_has_left_vline = false;
-    visuals.text_cursor.stroke = Stroke::new(1.5_f32, accent);
-
-    let widgets = &mut visuals.widgets;
-    widgets.noninteractive.bg_fill = CHROME;
-    widgets.noninteractive.weak_bg_fill = CHROME;
-    widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, BORDER);
-    widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, TEXT);
-    for (state, fill) in [
-        (&mut widgets.inactive, Color32::from_rgb(0x2D, 0x2D, 0x2D)),
-        (&mut widgets.hovered, Color32::from_rgb(0x37, 0x37, 0x37)),
-        (&mut widgets.active, Color32::from_rgb(0x41, 0x41, 0x41)),
-        (&mut widgets.open, Color32::from_rgb(0x37, 0x37, 0x37)),
-    ] {
-        state.bg_fill = fill;
-        state.weak_bg_fill = fill;
-        state.corner_radius = CornerRadius::same(4);
-        state.expansion = 0.0;
-    }
-    // bg_fill is the checkbox and radio well; weak_bg_fill stays the button face.
-    widgets.inactive.bg_fill = Color32::from_rgb(0x3A, 0x3A, 0x3A);
-    widgets.hovered.bg_fill = Color32::from_rgb(0x45, 0x45, 0x45);
-    widgets.inactive.bg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(0x55, 0x55, 0x55));
-    widgets.inactive.fg_stroke = Stroke::new(1.0_f32, TEXT);
-    widgets.hovered.bg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(0x4A, 0x4A, 0x4A));
-    widgets.hovered.fg_stroke = Stroke::new(1.0_f32, Color32::WHITE);
-    widgets.active.bg_stroke = Stroke::new(1.0_f32, accent);
-    widgets.active.fg_stroke = Stroke::new(1.0_f32, Color32::WHITE);
-    widgets.open.bg_stroke = Stroke::new(1.0_f32, BORDER);
-    widgets.open.fg_stroke = Stroke::new(1.0_f32, TEXT);
-    ctx.set_visuals(visuals);
-
+    set_theme(ctx, accent, dark, follow_system);
     ctx.style_mut(|style| {
         style.text_styles = [
             (TextStyle::Small, FontId::proportional(11.0)),
@@ -127,6 +175,76 @@ pub fn apply(ctx: &egui::Context, accent: Color32) {
         style.interaction.selectable_labels = false;
         style.interaction.tooltip_delay = 0.4;
     });
+}
+
+/// `follow_system` leaves the title bar to Windows; otherwise it matches `dark`.
+pub fn set_theme(ctx: &egui::Context, accent: Color32, dark: bool, follow_system: bool) {
+    IS_DARK.store(dark, Ordering::Relaxed);
+    let p = palette();
+    let mut visuals = if dark { egui::Visuals::dark() } else { egui::Visuals::light() };
+    visuals.panel_fill = p.chrome;
+    visuals.window_fill = p.raised;
+    visuals.extreme_bg_color = p.surface;
+    visuals.faint_bg_color = p.faces[0];
+    visuals.code_bg_color = p.surface;
+    visuals.hyperlink_color = accent;
+    visuals.selection.bg_fill = accent.gamma_multiply(0.45);
+    visuals.selection.stroke = Stroke::new(1.0_f32, p.text);
+    visuals.window_stroke = Stroke::new(1.0_f32, p.border);
+    visuals.window_corner_radius = CornerRadius::same(8);
+    visuals.menu_corner_radius = CornerRadius::same(6);
+    let shadow = Shadow {
+        offset: [0, 4],
+        blur: 16,
+        spread: 0,
+        color: Color32::from_black_alpha(if dark { 110 } else { 40 }),
+    };
+    visuals.window_shadow = shadow;
+    visuals.popup_shadow = shadow;
+    visuals.indent_has_left_vline = false;
+    visuals.text_cursor.stroke = Stroke::new(1.5_f32, accent);
+
+    let strong = if dark { Color32::WHITE } else { Color32::BLACK };
+    let widgets = &mut visuals.widgets;
+    widgets.noninteractive.bg_fill = p.chrome;
+    widgets.noninteractive.weak_bg_fill = p.chrome;
+    widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, p.border);
+    widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, p.text);
+    for (state, fill) in [
+        (&mut widgets.inactive, p.faces[0]),
+        (&mut widgets.hovered, p.faces[1]),
+        (&mut widgets.active, p.faces[2]),
+        (&mut widgets.open, p.faces[1]),
+    ] {
+        state.bg_fill = fill;
+        state.weak_bg_fill = fill;
+        state.corner_radius = CornerRadius::same(4);
+        state.expansion = 0.0;
+    }
+    // bg_fill is the checkbox and radio well; weak_bg_fill stays the button face.
+    widgets.inactive.bg_fill = p.wells[0];
+    widgets.hovered.bg_fill = p.wells[1];
+    widgets.inactive.bg_stroke = Stroke::new(1.0_f32, p.well_edge);
+    widgets.inactive.fg_stroke = Stroke::new(1.0_f32, p.text);
+    widgets.hovered.bg_stroke = Stroke::new(1.0_f32, p.well_edge);
+    widgets.hovered.fg_stroke = Stroke::new(1.0_f32, strong);
+    widgets.active.bg_stroke = Stroke::new(1.0_f32, accent);
+    widgets.active.fg_stroke = Stroke::new(1.0_f32, strong);
+    widgets.open.bg_stroke = Stroke::new(1.0_f32, p.border);
+    widgets.open.fg_stroke = Stroke::new(1.0_f32, p.text);
+    ctx.set_visuals(visuals);
+    ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(if follow_system {
+        egui::SystemTheme::SystemDefault
+    } else if dark {
+        egui::SystemTheme::Dark
+    } else {
+        egui::SystemTheme::Light
+    }));
+}
+
+/// Windows' app theme (`AppsUseLightTheme`), for the "System" choice.
+pub fn system_is_dark() -> bool {
+    super::shell::apps_use_light_theme().map_or(true, |light| !light)
 }
 
 /// Segoe UI from the system font folder, with egui's bundled font as fallback.

@@ -122,14 +122,14 @@ impl List<'_> {
         self.header(ui, &widths, &mut out);
 
         let body = ui.available_rect_before_wrap();
-        ui.painter().rect_filled(body, 0.0, theme::SURFACE);
+        ui.painter().rect_filled(body, 0.0, theme::surface());
         if self.lines.is_empty() {
             ui.painter().text(
                 body.center_top() + vec2(0.0, 40.0),
                 Align2::CENTER_CENTER,
                 self.empty,
                 FontId::proportional(13.0),
-                theme::TEXT_MUTED,
+                theme::text_muted(),
             );
             return out;
         }
@@ -172,21 +172,21 @@ impl List<'_> {
     fn header(&self, ui: &mut Ui, widths: &[f32], out: &mut Output) {
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEADER_HEIGHT), Sense::hover());
         let painter = ui.painter();
-        painter.rect_filled(rect, 0.0, theme::CHROME);
-        painter.hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0_f32, theme::BORDER));
+        painter.rect_filled(rect, 0.0, theme::chrome());
+        painter.hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0_f32, theme::border()));
         let mut x = rect.left();
         for (index, (column, width)) in self.columns.iter().zip(widths).enumerate() {
             let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(*width, rect.height()));
             x += width;
             let response = ui.interact(cell, self.id.with(("head", index)), Sense::click());
             if response.hovered() {
-                painter.rect_filled(cell, 0.0, theme::HOVER);
+                painter.rect_filled(cell, 0.0, theme::hover());
             }
             if response.clicked() {
                 out.sort = Some(index);
             }
             let sorted = self.sort.column == index;
-            let color = if sorted { theme::TEXT } else { theme::TEXT_MUTED };
+            let color = if sorted { theme::text() } else { theme::text_muted() };
             let galley = single_line(painter, column.title, theme::semibold(12.0), color, width - PAD * 2.0 - 12.0);
             let text_x = if column.right {
                 cell.right() - PAD - galley.size().x
@@ -201,7 +201,7 @@ impl List<'_> {
                 paint_sort_arrow(painter, pos2(arrow_x, cell.center().y), self.sort.descending);
             }
             if index + 1 < self.columns.len() {
-                painter.vline(cell.right() - 0.5, cell.top() + 7.0..=cell.bottom() - 7.0, Stroke::new(1.0_f32, theme::BORDER));
+                painter.vline(cell.right() - 0.5, cell.top() + 7.0..=cell.bottom() - 7.0, Stroke::new(1.0_f32, theme::border()));
             }
         }
     }
@@ -232,10 +232,10 @@ impl List<'_> {
             painter.rect_filled(rect, 0.0, art.accent.gamma_multiply(0.30));
             painter.rect_filled(Rect::from_min_size(rect.min, vec2(2.0, rect.height())), 0.0, art.accent);
         } else if hovered {
-            painter.rect_filled(rect, 0.0, theme::HOVER);
+            painter.rect_filled(rect, 0.0, theme::hover());
         }
         let on_fill = row.fill.is_some();
-        let text_color = if on_fill { theme::TEXT_ON_FILL } else { theme::TEXT };
+        let text_color = if on_fill { theme::TEXT_ON_FILL } else { theme::text() };
 
         let mut x = rect.left() + PAD;
         if let Some(checked) = row.check {
@@ -273,7 +273,7 @@ impl List<'_> {
             if end <= start || cell.is_empty() {
                 continue;
             }
-            let color = if index == 0 { text_color } else if on_fill { theme::TEXT_ON_FILL } else { theme::TEXT_MUTED };
+            let color = if index == 0 { text_color } else if on_fill { theme::TEXT_ON_FILL } else { theme::text_muted() };
             let galley = single_line(painter, cell, FontId::proportional(13.0), color, end - start);
             let gx = if column.right { end - galley.size().x } else { start };
             painter.galley(Pos2::new(gx, rect.center().y - galley.size().y / 2.0), galley, color);
@@ -350,8 +350,9 @@ fn paint_check(painter: &Painter, rect: Rect, checked: bool, accent: Color32, on
             Stroke::new(1.7_f32, mark),
         ));
     } else {
-        let edge = if on_fill { Color32::from_gray(0x60) } else { Color32::from_gray(0x8A) };
-        let base = if on_fill { Color32::from_white_alpha(140) } else { Color32::from_gray(0x1F) };
+        let (well, well_edge) = theme::check_well();
+        let edge = if on_fill { Color32::from_gray(0x60) } else { well_edge };
+        let base = if on_fill { Color32::from_white_alpha(140) } else { well };
         painter.rect_filled(rect, 3.0, base);
         painter.rect_stroke(rect, 3.0, Stroke::new(1.0_f32, edge), StrokeKind::Inside);
     }
@@ -359,7 +360,7 @@ fn paint_check(painter: &Painter, rect: Rect, checked: bool, accent: Color32, on
 
 fn paint_group(painter: &Painter, rect: Rect, title: &str, collapsed: bool, hovered: bool) {
     if hovered {
-        painter.rect_filled(rect, 0.0, theme::HOVER);
+        painter.rect_filled(rect, 0.0, theme::hover());
     }
     let c = pos2(rect.left() + PAD + 4.0, rect.center().y);
     let points = if collapsed {
@@ -367,13 +368,13 @@ fn paint_group(painter: &Painter, rect: Rect, title: &str, collapsed: bool, hove
     } else {
         vec![c + vec2(-4.0, -2.0), c + vec2(4.0, -2.0), c + vec2(0.0, 2.5)]
     };
-    painter.add(Shape::convex_polygon(points, theme::TEXT_MUTED, Stroke::NONE));
-    let galley = single_line(painter, title, theme::semibold(12.5), theme::TEXT, rect.width() - 60.0);
+    painter.add(Shape::convex_polygon(points, theme::text_muted(), Stroke::NONE));
+    let galley = single_line(painter, title, theme::semibold(12.5), theme::text(), rect.width() - 60.0);
     let text_pos = pos2(rect.left() + PAD + 16.0, rect.center().y - galley.size().y / 2.0);
     let line_x = text_pos.x + galley.size().x + 10.0;
-    painter.galley(text_pos, galley, theme::TEXT);
+    painter.galley(text_pos, galley, theme::text());
     if line_x < rect.right() - PAD {
-        painter.hline(line_x..=rect.right() - PAD, rect.center().y, Stroke::new(1.0_f32, theme::BORDER));
+        painter.hline(line_x..=rect.right() - PAD, rect.center().y, Stroke::new(1.0_f32, theme::border()));
     }
 }
 
@@ -383,5 +384,5 @@ fn paint_sort_arrow(painter: &Painter, center: Pos2, descending: bool) {
     } else {
         vec![center + vec2(-3.5, 1.5), center + vec2(3.5, 1.5), center + vec2(0.0, -2.5)]
     };
-    painter.add(Shape::convex_polygon(points, theme::TEXT_MUTED, Stroke::NONE));
+    painter.add(Shape::convex_polygon(points, theme::text_muted(), Stroke::NONE));
 }
