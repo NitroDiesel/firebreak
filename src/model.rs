@@ -286,6 +286,19 @@ settings! {
     /// User and custom allow rules outrank the internal blocklist.
     user_allows_override_blocklist: bool = true,
     filters_temporary: bool = false,
+    /// BlockOutboundConnections: apps need permission to connect out.
+    block_outbound: bool = true,
+    /// BlockInboundConnections: apps need permission to accept connections.
+    block_inbound: bool = true,
+    /// UseStealthMode: no replies to port scans; also blocks inbound.
+    stealth_mode: bool = true,
+    /// InstallBoottimeFilters: filtering from boot, before the engine loads.
+    boot_time_filters: bool = true,
+    /// AllowIpForwarding: leave forwarded traffic alone in the boot-time filters
+    /// (Mobile Hotspot, Internet Connection Sharing, NAT for VMs).
+    allow_ip_forwarding: bool = false,
+    /// IsInternalRulesDisabled: install only the user's own rules.
+    internal_rules_disabled: bool = false,
     // Same defaults as BlocklistSpyState / UpdateState / ExtraState in db.c.
     blocklist_spy: BlocklistState = BlocklistState::Block,
     blocklist_update: BlocklistState = BlocklistState::Disable,

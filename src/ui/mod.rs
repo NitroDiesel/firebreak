@@ -1220,6 +1220,11 @@ impl SimplewallApp {
                         changed |= ui.checkbox(&mut s.allow_loopback, "Allow loopback connections").changed();
                         changed |= ui.checkbox(&mut s.allow_ipv6, "Allow IPv6 neighbor discovery").changed();
                         changed |= ui.checkbox(&mut s.allow_lan, "Allow local network (LAN)").changed();
+                        ui.separator();
+                        changed |= ui.checkbox(&mut s.block_outbound, "Block outbound connections").changed();
+                        changed |= ui.checkbox(&mut s.block_inbound, "Block inbound connections").changed();
+                        changed |= ui.checkbox(&mut s.stealth_mode, "Use stealth mode").changed();
+                        ui.separator();
                         changed |= ui
                             .checkbox(&mut s.user_allows_override_blocklist, "User rules take priority over blocklist")
                             .changed();

@@ -547,6 +547,26 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                         filters |= ui
                             .checkbox(&mut s.user_allows_override_blocklist, "User rules take priority over the blocklist")
                             .changed();
+                        section(ui, "Block");
+                        filters |= ui.checkbox(&mut s.block_outbound, "Block outbound connections").changed();
+                        filters |= ui.checkbox(&mut s.block_inbound, "Block inbound connections").changed();
+                        filters |= ui
+                            .checkbox(&mut s.stealth_mode, "Use stealth mode (do not answer port scans)")
+                            .changed();
+                        filters |= ui
+                            .checkbox(&mut s.boot_time_filters, "Install boot-time filters")
+                            .on_hover_text("Filter from the moment Windows starts, before the firewall engine loads.")
+                            .changed();
+                        ui.add_enabled_ui(s.boot_time_filters, |ui| {
+                            filters |= ui
+                                .checkbox(&mut s.allow_ip_forwarding, "Allow IP forwarding")
+                                .on_hover_text("Needed for Mobile Hotspot, Internet Connection Sharing, and NAT for virtual machines.")
+                                .changed();
+                        });
+                        filters |= ui
+                            .checkbox(&mut s.internal_rules_disabled, "Disable internal rules")
+                            .on_hover_text("Install only your own rules; the system rules and blocklist are skipped.")
+                            .changed();
                     }
                     Page::Blocklist => {
                         section(ui, "Blocklist");

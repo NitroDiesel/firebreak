@@ -21,10 +21,12 @@ use windows::Win32::Security::{
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 use crate::apps::{expand_env, wide};
-use crate::model::{AppItem, AppKind, Direction, Profile, Rule, RuleAction, RuleOrigin, APP_NAME, SYSTEM_APP};
+use crate::model::{AppItem, AppKind, Direction, Profile, Rule, RuleAction, RuleOrigin, Settings, APP_NAME, SYSTEM_APP};
 use crate::rules::{self, PortSpec, Token};
 
 const AUTH_WINNT: u32 = 10;
+/// Above everything else (FWW_HIGHEST): stealth mode.
+const WEIGHT_HIGHEST: u8 = 0x10;
 const WEIGHT_IMPORTANT: u8 = 0x0F;
 /// Above the blocklist, so a user allow can punch through it (issue 2073).
 const WEIGHT_USER_OVERRIDE: u8 = 0x0E;
@@ -98,10 +100,17 @@ pub fn install(profile: &Profile, temporary: bool) -> Result<String, String> {
             if profile.settings.allow_lan {
                 add_lan(engine.handle, !temporary)?;
             }
+            let s = &profile.settings;
+            if s.stealth_mode {
+                add_stealth(engine.handle, !temporary)?;
+            }
+            if s.boot_time_filters && !temporary {
+                add_boot_time(engine.handle, s)?;
+            }
             let skipped = add_rules(engine.handle, profile, !temporary)?;
             add_apps(engine.handle, profile, !temporary)?;
             add_self(engine.handle, !temporary)?;
-            add_block_all(engine.handle, !temporary)?;
+            add_block_all(engine.handle, s, !temporary)?;
             Ok(skipped)
         })();
         let skipped = match result {
@@ -327,9 +336,104 @@ unsafe fn add_ipv6_bootstrap(engine: HANDLE, persistent: bool) -> Result<(), Str
     Ok(())
 }
 
-unsafe fn add_block_all(engine: HANDLE, persistent: bool) -> Result<(), String> {
-    for layer in connect_and_accept() {
-        add_filter(engine, BLOCK_ALL_NAME, layer, WEIGHT_LOWEST, false, persistent, &mut [])?;
+/// The catch-all filters at the lowest weight: whatever no other filter
+/// permitted. Outbound and inbound can each be set to permit instead
+/// (BlockOutboundConnections / BlockInboundConnections); stealth mode always
+/// blocks inbound, as in `_wfp_createglobalfilters`.
+unsafe fn add_block_all(engine: HANDLE, settings: &Settings, persistent: bool) -> Result<(), String> {
+    let flags = if persistent { FWPM_FILTER_FLAG_PERSISTENT } else { FWPM_FILTER_FLAGS(0) };
+    let outbound = if settings.block_outbound { Action::Block } else { Action::Permit };
+    if settings.block_outbound {
+        // Workaround #689 in the C build: reused TCP connections skip ALE connect
+        // unless the TCP templates callout sees them.
+        for (layer, callout) in [
+            (FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_CALLOUT_TCP_TEMPLATES_CONNECT_LAYER_V4),
+            (FWPM_LAYER_ALE_AUTH_CONNECT_V6, FWPM_CALLOUT_TCP_TEMPLATES_CONNECT_LAYER_V6),
+        ] {
+            add_filter_ex(engine, BLOCK_ALL_NAME, layer, WEIGHT_LOWEST, Action::Callout(callout), flags, &mut [])?;
+        }
+    }
+    for layer in [FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6] {
+        add_filter_ex(engine, BLOCK_ALL_NAME, layer, WEIGHT_LOWEST, outbound, flags, &mut [])?;
+    }
+    let inbound = if settings.block_inbound || settings.stealth_mode { Action::Block } else { Action::Permit };
+    for layer in [FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6] {
+        add_filter_ex(engine, BLOCK_ALL_NAME, layer, WEIGHT_LOWEST, inbound, flags, &mut [])?;
+    }
+    Ok(())
+}
+
+fn flags_condition(match_type: FWP_MATCH_TYPE, flags: u32) -> FWPM_FILTER_CONDITION0 {
+    let mut cond = FWPM_FILTER_CONDITION0 {
+        fieldKey: FWPM_CONDITION_FLAGS,
+        matchType: match_type,
+        ..Default::default()
+    };
+    cond.conditionValue.r#type = FWP_UINT32;
+    cond.conditionValue.Anonymous.uint32 = flags;
+    cond
+}
+
+const LOOPBACK_FLAGS: u32 = FWP_CONDITION_FLAG_IS_LOOPBACK | FWP_CONDITION_FLAG_IS_APPCONTAINER_LOOPBACK;
+
+/// UseStealthMode: no "destination unreachable" replies for UDP port scans and
+/// no TCP resets for closed ports, so scanners see nothing
+/// (learn.microsoft.com/windows/win32/fwp/preventing-port-scanning).
+unsafe fn add_stealth(engine: HANDLE, persistent: bool) -> Result<(), String> {
+    let flags = if persistent { FWPM_FILTER_FLAG_PERSISTENT } else { FWPM_FILTER_FLAGS(0) };
+    let not_loopback = flags_condition(FWP_MATCH_FLAGS_NONE_SET, LOOPBACK_FLAGS);
+    let unreachable = condition_u16(ICMP_TYPE, 3);
+    for layer in [FWPM_LAYER_OUTBOUND_ICMP_ERROR_V4, FWPM_LAYER_OUTBOUND_ICMP_ERROR_V6] {
+        add_filter_ex(engine, "BlockIcmpError", layer, WEIGHT_HIGHEST, Action::Block, flags, &mut [not_loopback, unreachable])?;
+    }
+    let not_local = flags_condition(FWP_MATCH_FLAGS_NONE_SET, LOOPBACK_FLAGS | FWP_CONDITION_FLAG_IS_IPSEC_SECURED);
+    for (layer, callout) in [
+        (FWPM_LAYER_INBOUND_TRANSPORT_V4_DISCARD, FWPM_CALLOUT_WFP_TRANSPORT_LAYER_V4_SILENT_DROP),
+        (FWPM_LAYER_INBOUND_TRANSPORT_V6_DISCARD, FWPM_CALLOUT_WFP_TRANSPORT_LAYER_V6_SILENT_DROP),
+    ] {
+        add_filter_ex(engine, "BlockTcpRstOnClose", layer, WEIGHT_HIGHEST, Action::Callout(callout), flags, &mut [not_local])?;
+    }
+    Ok(())
+}
+
+/// InstallBoottimeFilters: filters Windows enforces from boot until the
+/// filter engine has loaded the persistent ones. Same set as the C build:
+/// loopback permitted, inbound and ICMP errors blocked, and forwarded traffic
+/// blocked unless AllowIpForwarding (upstream #2165, for Mobile Hotspot and
+/// Internet Connection Sharing). Boot-time filters cannot also be persistent.
+unsafe fn add_boot_time(engine: HANDLE, settings: &Settings) -> Result<(), String> {
+    let flags = FWPM_FILTER_FLAG_BOOTTIME;
+    let loopback = flags_condition(FWP_MATCH_FLAGS_ANY_SET, LOOPBACK_FLAGS);
+    for layer in [
+        FWPM_LAYER_IPFORWARD_V4,
+        FWPM_LAYER_IPFORWARD_V6,
+        FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
+        FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
+        FWPM_LAYER_INBOUND_ICMP_ERROR_V4,
+        FWPM_LAYER_INBOUND_ICMP_ERROR_V6,
+        FWPM_LAYER_OUTBOUND_ICMP_ERROR_V4,
+        FWPM_LAYER_OUTBOUND_ICMP_ERROR_V6,
+    ] {
+        add_filter_ex(engine, "BootTime", layer, WEIGHT_IMPORTANT, Action::Permit, flags, &mut [loopback])?;
+    }
+    for layer in [
+        FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
+        FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
+        FWPM_LAYER_INBOUND_ICMP_ERROR_V4,
+        FWPM_LAYER_INBOUND_ICMP_ERROR_V6,
+        FWPM_LAYER_OUTBOUND_ICMP_ERROR_V4,
+        FWPM_LAYER_OUTBOUND_ICMP_ERROR_V6,
+    ] {
+        add_filter_ex(engine, "BootTime", layer, WEIGHT_LOWEST, Action::Block, flags, &mut [])?;
+    }
+    if !settings.allow_ip_forwarding {
+        let not_pass_through = flags_condition(
+            FWP_MATCH_FLAGS_NONE_SET,
+            FWP_CONDITION_FLAG_IS_OUTBOUND_PASS_THRU | FWP_CONDITION_FLAG_IS_INBOUND_PASS_THRU,
+        );
+        for layer in [FWPM_LAYER_IPFORWARD_V4, FWPM_LAYER_IPFORWARD_V6] {
+            add_filter_ex(engine, "BootTime", layer, WEIGHT_APP, Action::Block, flags, &mut [not_pass_through])?;
+        }
     }
     Ok(())
 }
@@ -383,7 +487,9 @@ unsafe fn add_app_permit(engine: HANDLE, name: &str, id: &AppId, persistent: boo
 /// Returns the names of rules that were skipped because their text does not parse.
 unsafe fn add_rules(engine: HANDLE, profile: &Profile, persistent: bool) -> Result<Vec<String>, String> {
     let mut skipped = Vec::new();
-    for rule in profile.rules.iter().filter(|rule| rule.enabled) {
+    // IsInternalRulesDisabled leaves only the user's own rules.
+    let internal_off = profile.settings.internal_rules_disabled;
+    for rule in profile.rules.iter().filter(|rule| rule.enabled && !(internal_off && rule.origin != RuleOrigin::User)) {
         let weight = rule_weight(rule, profile.settings.user_allows_override_blocklist);
         if !add_one_rule(engine, rule, persistent, weight)? {
             skipped.push(rule.name.clone());
@@ -774,19 +880,46 @@ unsafe fn add_filter(
     persistent: bool,
     conds: &mut [FWPM_FILTER_CONDITION0],
 ) -> Result<(), String> {
+    let action = if permit { Action::Permit } else { Action::Block };
+    let flags = if persistent { FWPM_FILTER_FLAG_PERSISTENT } else { FWPM_FILTER_FLAGS(0) };
+    add_filter_ex(engine, name, layer, weight, action, flags, conds)
+}
+
+#[derive(Clone, Copy)]
+enum Action {
+    Permit,
+    Block,
+    /// A built-in Windows callout that terminates the classify.
+    Callout(windows::core::GUID),
+}
+
+unsafe fn add_filter_ex(
+    engine: HANDLE,
+    name: &str,
+    layer: windows::core::GUID,
+    weight: u8,
+    action: Action,
+    flags: FWPM_FILTER_FLAGS,
+    conds: &mut [FWPM_FILTER_CONDITION0],
+) -> Result<(), String> {
     let name_w = wide(name);
     let desc = wide(APP_NAME);
     let mut provider = provider_guid();
+    let mut filter_action = FWPM_ACTION0::default();
+    match action {
+        Action::Permit => filter_action.r#type = FWP_ACTION_PERMIT,
+        Action::Block => filter_action.r#type = FWP_ACTION_BLOCK,
+        Action::Callout(key) => {
+            filter_action.r#type = FWP_ACTION_CALLOUT_TERMINATING;
+            filter_action.Anonymous.calloutKey = key;
+        }
+    }
     let mut filter = FWPM_FILTER0 {
         displayData: FWPM_DISPLAY_DATA0 {
             name: PWSTR(name_w.as_ptr() as *mut _),
             description: PWSTR(desc.as_ptr() as *mut _),
         },
-        flags: if persistent {
-            FWPM_FILTER_FLAG_PERSISTENT
-        } else {
-            FWPM_FILTER_FLAGS(0)
-        },
+        flags,
         providerKey: &mut provider,
         layerKey: layer,
         subLayerKey: sublayer_guid(),
@@ -797,10 +930,7 @@ unsafe fn add_filter(
         } else {
             conds.as_mut_ptr()
         },
-        action: FWPM_ACTION0 {
-            r#type: if permit { FWP_ACTION_PERMIT } else { FWP_ACTION_BLOCK },
-            ..Default::default()
-        },
+        action: filter_action,
         ..Default::default()
     };
     let mut id = 0u64;
