@@ -26,6 +26,7 @@ pub const DANGER: Color32 = Color32::from_rgb(0xFF, 0x7C, 0x94);
 pub const FILL_INVALID: Color32 = Color32::from_rgb(0xFF, 0x7C, 0x94);
 pub const FILL_SPECIAL: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xAA);
 pub const FILL_SIGNED: Color32 = Color32::from_rgb(0xAE, 0xE4, 0xA2);
+pub const FILL_CONNECTION: Color32 = Color32::from_rgb(0xFF, 0xA8, 0xF2);
 pub const FILL_SYSTEM: Color32 = Color32::from_rgb(0x96, 0xC4, 0xFA);
 pub const FILL_UNDELETE: Color32 = Color32::from_rgb(0xD4, 0xD4, 0xD4);
 

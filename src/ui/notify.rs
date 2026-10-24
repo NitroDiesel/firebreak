@@ -14,7 +14,18 @@ use super::list::FileIcons;
 use super::shell;
 use super::theme;
 
-pub const SIZE: [f32; 2] = [420.0, 298.0];
+pub const WIDTH: f32 = 420.0;
+/// Header, buttons, and margins; each detail row adds `ROW`.
+const BASE_HEIGHT: f32 = 166.0;
+const ROW: f32 = 22.0;
+
+impl Alert<'_> {
+    /// Window height for this alert's rows.
+    pub fn height(&self) -> f32 {
+        let rows = 5 + usize::from(self.signature.is_some()) + usize::from(self.host.is_some());
+        BASE_HEIGHT + rows as f32 * ROW
+    }
+}
 
 pub enum Action {
     None,
@@ -32,7 +43,7 @@ pub enum Action {
 }
 
 /// Bottom-right of the work area, in points.
-pub fn builder(ctx: &egui::Context) -> ViewportBuilder {
+pub fn builder(ctx: &egui::Context, height: f32) -> ViewportBuilder {
     let mut builder = ViewportBuilder::default()
         .with_title("simplewall")
         .with_decorations(false)
@@ -40,12 +51,12 @@ pub fn builder(ctx: &egui::Context) -> ViewportBuilder {
         .with_taskbar(false)
         .with_resizable(false)
         .with_active(false)
-        .with_inner_size(SIZE);
+        .with_inner_size([WIDTH, height]);
     if let Some(area) = shell::work_area() {
         let ppp = ctx.input(|i| i.viewport().native_pixels_per_point).unwrap_or(1.0);
         let margin = 12.0;
-        let x = area.right as f32 / ppp - SIZE[0] - margin;
-        let y = area.bottom as f32 / ppp - SIZE[1] - margin;
+        let x = area.right as f32 / ppp - WIDTH - margin;
+        let y = area.bottom as f32 / ppp - height - margin;
         builder = builder.with_position(pos2(x, y));
     }
     builder
@@ -59,6 +70,8 @@ pub struct Alert<'a> {
     pub accent: Color32,
     /// Outer None: not checked; inner None: not signed.
     pub signature: Option<Option<String>>,
+    /// Host name of the remote address, once looked up.
+    pub host: Option<String>,
 }
 
 pub fn show(ctx: &egui::Context, alert: &Alert, files: &mut FileIcons) -> Action {
@@ -136,6 +149,9 @@ pub fn show(ctx: &egui::Context, alert: &Alert, files: &mut FileIcons) -> Action
                     row("Signature", text);
                 }
                 row("Address", if p.remote_addr.is_empty() { "—".into() } else { p.remote_addr.clone() });
+                if let Some(host) = &alert.host {
+                    row("Host", host.clone());
+                }
                 row("Port", if p.remote_port == 0 { "—".into() } else { p.remote_port.to_string() });
                 row("Protocol", protocol_label(p.protocol).to_string());
                 row("Date", shell::format_time(p.time));

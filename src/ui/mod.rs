@@ -5,6 +5,7 @@
 mod dialogs;
 mod inspect;
 mod list;
+mod monitor;
 mod notify;
 mod shell;
 mod theme;
@@ -168,6 +169,10 @@ pub struct SimplewallApp {
     on_top: bool,
     /// Signature and hash checks.
     inspector: inspect::Inspector,
+    monitor: monitor::Monitor,
+    resolver: monitor::Resolver,
+    /// Lowercase paths of apps with an established connection.
+    connected: HashSet<String>,
     /// Allowed apps waiting for a fresh hash to compare against later.
     hash_baseline: HashSet<String>,
     last_hash_sweep: Instant,
@@ -209,6 +214,8 @@ impl SimplewallApp {
         let filters_on = wfp::filters_installed().unwrap_or(false);
         let sort = Sort { column: 0, descending: false };
         let start_minimized = minimized || profile.settings.start_minimized;
+        let (network_monitor, show_waiting) =
+            (profile.settings.network_monitor, profile.settings.show_wait_connections);
         let (tray_tx, tray_rx) = channel();
         let (events_tx, events_rx) = channel();
         let tray_state = tray_state_of(&profile, filters_on, false);
@@ -249,6 +256,9 @@ impl SimplewallApp {
             startup: None,
             on_top: false,
             inspector: inspect::Inspector::spawn(ctx.clone()),
+            monitor: monitor::Monitor::spawn(ctx.clone(), network_monitor, show_waiting),
+            resolver: monitor::Resolver::spawn(ctx.clone()),
+            connected: HashSet::new(),
             hash_baseline: HashSet::new(),
             last_hash_sweep: Instant::now(),
             admin: wfp::is_admin(),
@@ -385,6 +395,12 @@ impl SimplewallApp {
             }
         }
         let signers = self.inspector.signers();
+        if s.resolve_hostnames && self.tab == Tab::Connections {
+            for ip in self.connections.iter().filter_map(|c| c.remote_ip) {
+                self.resolver.ask(ip);
+            }
+        }
+        let hosts = if s.resolve_hostnames { self.resolver.hosts() } else { Default::default() };
         let source = view::Source {
             profile: &self.profile,
             connections: &self.connections,
@@ -393,6 +409,8 @@ impl SimplewallApp {
             sort: self.sorts[index],
             collapsed: &self.collapsed[index],
             signers: &signers,
+            connected: &self.connected,
+            hosts: &hosts,
         };
         self.lines = view::build(self.tab, &source);
         self.unused = self.profile.apps.iter().filter(|a| self.profile.app_is_unused(a)).count();
@@ -407,7 +425,7 @@ impl SimplewallApp {
         self.tab = tab;
         self.dirty = true;
         match tab {
-            Tab::Connections => self.connections = log::connections(),
+            Tab::Connections => self.connections = log::connections(self.profile.settings.show_wait_connections),
             Tab::Packets => self.load_packets(),
             _ => {}
         }
@@ -430,7 +448,7 @@ impl SimplewallApp {
     fn refresh(&mut self) {
         self.profile.apps = apps::merge(&self.profile.apps, apps::enumerate());
         match self.tab {
-            Tab::Connections => self.connections = log::connections(),
+            Tab::Connections => self.connections = log::connections(self.profile.settings.show_wait_connections),
             Tab::Packets => self.load_packets(),
             _ => {}
         }
@@ -653,6 +671,10 @@ impl SimplewallApp {
             self.inspector.want_signature(&app.path, s.check_revocation);
             self.inspector.signer(&app.path)
         });
+        let host = match packet.remote_addr.parse() {
+            Ok(ip) if s.resolve_hostnames => self.resolver.host(ip).flatten(),
+            _ => None,
+        };
         let alert = notify::Alert {
             packet: &packet,
             app: &app,
@@ -660,11 +682,12 @@ impl SimplewallApp {
             count: self.alerts.len(),
             accent: self.accent,
             signature: signature.flatten(),
+            host,
         };
         let files = &mut self.files;
         let action = ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("simplewall-alert"),
-            notify::builder(ctx),
+            notify::builder(ctx, alert.height()),
             |ctx, _| notify::show(ctx, &alert, files),
         );
         let done = |alerts: &mut Vec<Packet>| alerts.retain(|a| !a.path.eq_ignore_ascii_case(&packet.path));
@@ -764,6 +787,32 @@ impl SimplewallApp {
             self.changed();
         } else if save {
             self.save();
+        }
+    }
+
+    /// Take the monitor's newest connection table: it refreshes the Connections
+    /// tab and the "has a connection" highlight on the app tabs.
+    fn sync_connections(&mut self) {
+        let s = &self.profile.settings;
+        self.monitor.configure(s.network_monitor, s.show_wait_connections);
+        if let Some(rows) = self.monitor.latest() {
+            let connected: HashSet<String> =
+                rows.iter().filter(|c| c.is_live()).map(|c| c.path.to_lowercase()).collect();
+            if connected != self.connected {
+                self.connected = connected;
+                if self.tab.app_kind().is_some() {
+                    self.dirty = true;
+                }
+            }
+            if self.tab == Tab::Connections {
+                // Rows are replaced wholesale; a selection by index would point elsewhere.
+                self.selected[Tab::Connections.index()] = None;
+                self.connections = rows;
+                self.dirty = true;
+            }
+        }
+        if self.resolver.changed() && self.tab == Tab::Connections {
+            self.dirty = true;
         }
     }
 
@@ -1813,6 +1862,7 @@ impl eframe::App for SimplewallApp {
             self.dirty = true;
         }
         self.check_file_hashes(ctx);
+        self.sync_connections();
         self.guard_close(ctx);
         self.shortcuts(ctx);
         if self.dirty {

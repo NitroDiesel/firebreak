@@ -187,7 +187,7 @@ fn processes() -> Vec<AppItem> {
     out
 }
 
-fn process_path(pid: u32) -> Option<String> {
+pub fn process_path(pid: u32) -> Option<String> {
     if pid == 0 {
         return None;
     }

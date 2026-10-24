@@ -458,16 +458,18 @@ enum Page {
     Filters,
     Blocklist,
     Security,
+    Connections,
     Notifications,
     Logging,
 }
 
 impl Page {
-    const ALL: [Page; 6] = [
+    const ALL: [Page; 7] = [
         Page::General,
         Page::Filters,
         Page::Blocklist,
         Page::Security,
+        Page::Connections,
         Page::Notifications,
         Page::Logging,
     ];
@@ -478,6 +480,7 @@ impl Page {
             Page::Filters => "Filters",
             Page::Blocklist => "Blocklist",
             Page::Security => "Security",
+            Page::Connections => "Connections",
             Page::Notifications => "Notifications",
             Page::Logging => "Packets log",
         }
@@ -601,6 +604,19 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                             .checkbox(&mut s.check_hashes, "Block an allowed app again when its file changes")
                             .changed();
                         hint(ui, "Takes a SHA-256 of each allowed app and compares it every 10 minutes.");
+                    }
+                    Page::Connections => {
+                        section(ui, "Connections");
+                        saved |= ui
+                            .checkbox(&mut s.network_monitor, "Monitor connections (refresh every 2 seconds)")
+                            .changed();
+                        saved |= ui
+                            .checkbox(&mut s.show_wait_connections, "Show connections waiting to close")
+                            .changed();
+                        saved |= ui
+                            .checkbox(&mut s.resolve_hostnames, "Look up host names for remote addresses")
+                            .changed();
+                        hint(ui, "Apps with an active connection are shown in pink while monitoring is on.");
                     }
                     Page::Notifications => {
                         section(ui, "Notifications");

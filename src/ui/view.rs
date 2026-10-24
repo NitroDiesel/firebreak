@@ -81,12 +81,13 @@ impl Tab {
             col("Protocol", 110.0, true),
             col("Direction", 110.0, true),
         ];
-        static CONNECTIONS: [Column; 5] = [
+        static CONNECTIONS: [Column; 6] = [
             col("Name", 0.0, false),
-            col("Local address", 200.0, false),
-            col("Remote address", 200.0, false),
-            col("Protocol", 80.0, true),
-            col("State", 110.0, true),
+            col("Local address", 190.0, false),
+            col("Remote address", 190.0, false),
+            col("Host", 200.0, false),
+            col("Protocol", 70.0, true),
+            col("State", 100.0, true),
         ];
         static PACKETS: [Column; 6] = [
             col("Name", 0.0, false),
@@ -128,6 +129,10 @@ pub struct Source<'a> {
     pub collapsed: &'a HashSet<u8>,
     /// Lowercase path to signer (None = not signed), from the background checks.
     pub signers: &'a std::collections::HashMap<String, Option<String>>,
+    /// Lowercase paths of apps with an established connection.
+    pub connected: &'a HashSet<String>,
+    /// Host names for remote addresses.
+    pub hosts: &'a std::collections::HashMap<std::net::IpAddr, Option<String>>,
 }
 
 enum Key {
@@ -257,9 +262,11 @@ fn apps(kind: AppKind, src: &Source) -> Vec<Entry> {
         let signer = (profile.settings.check_signatures && app.kind == AppKind::Regular)
             .then(|| src.signers.get(&app.path.to_lowercase()).cloned())
             .flatten();
-        // Same order as `_app_getappcolor`: invalid, signed, undeletable, system.
+        // Same order as `_app_getappcolor`: invalid, connection, signed, undeletable, system.
         let fill = if !exists {
             Some(theme::FILL_INVALID)
+        } else if src.connected.contains(&app.path.to_lowercase()) {
+            Some(theme::FILL_CONNECTION)
         } else if matches!(signer, Some(Some(_))) {
             Some(theme::FILL_SIGNED)
         } else if app.pinned {
@@ -409,21 +416,38 @@ fn connections(src: &Source) -> Vec<Entry> {
     src.connections
         .iter()
         .enumerate()
-        .filter(|(_, c)| query_matches(src.query, false, &[&c.name, &c.local, &c.remote, c.proto]))
         .map(|(id, c)| {
+            let host = c
+                .remote_ip
+                .and_then(|ip| src.hosts.get(&ip).cloned().flatten())
+                .unwrap_or_default();
+            (id, c, host)
+        })
+        .filter(|(_, c, host)| query_matches(src.query, false, &[&c.name, &c.path, &c.local, &c.remote, host, c.proto]))
+        .map(|(id, c, host)| {
+            let icon = if c.path.contains('\\') {
+                Icon::File { path: c.path.clone(), generic: false }
+            } else {
+                Icon::None
+            };
+            let mut hint = format!("PID {}", c.pid);
+            if !c.path.is_empty() {
+                hint = format!("{}\n{hint}", c.path);
+            }
             let row = Row {
                 id,
                 cells: vec![
                     c.name.clone(),
                     c.local.clone(),
                     c.remote.clone(),
+                    host,
                     c.proto.to_string(),
-                    c.state.clone(),
+                    c.state.to_string(),
                 ],
                 check: None,
-                icon: Icon::None,
+                icon,
                 fill: None,
-                hint: Some(format!("PID {}", c.pid)),
+                hint: Some(hint),
             };
             Entry {
                 group: 0,

@@ -323,6 +323,12 @@ settings! {
     check_revocation: bool = false,
     /// IsHashesEnabled: block an allowed app when its file changes on disk.
     check_hashes: bool = false,
+    /// IsNetworkMonitorEnabled: refresh the Connections tab every 2 seconds.
+    network_monitor: bool = true,
+    /// IsNetworkShowWaitConnections: list connections of processes that have exited.
+    show_wait_connections: bool = true,
+    /// IsNetworkResolutionsEnabled: look up host names for remote addresses.
+    resolve_hostnames: bool = true,
     /// IsStartMinimized: start in the tray.
     start_minimized: bool = false,
     /// ConfirmExit2: ask before exiting while filters are on.
