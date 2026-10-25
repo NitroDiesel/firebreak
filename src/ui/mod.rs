@@ -843,6 +843,30 @@ impl SimplewallApp {
         }
     }
 
+    /// IsWUFixEnabled: move the update services to wusvc.exe and allow it, as
+    /// `_app_wufixenable` does, or move them back.
+    fn set_wu_fix(&mut self, on: bool) {
+        if let Err(err) = crate::wufix::set(on) {
+            self.notify(err, true);
+            return;
+        }
+        self.profile.settings.wu_fix = on;
+        let path = crate::wufix::wusvc_path().to_string_lossy().into_owned();
+        let index = match self.profile.apps.iter().position(|a| a.path.eq_ignore_ascii_case(&path)) {
+            Some(index) => index,
+            None if on => {
+                self.profile.apps.push(AppItem::new(path, "wusvc.exe".into(), AppKind::Regular));
+                self.profile.apps.len() - 1
+            }
+            None => return self.changed(),
+        };
+        let app = &mut self.profile.apps[index];
+        app.enabled = on;
+        app.pinned = on;
+        app.comment = if on { "Windows Update services (Allow Windows Update)".into() } else { String::new() };
+        self.changed();
+    }
+
     /// Ask GitHub for a newer release on a background thread. Automatic checks
     /// run at most once a day.
     fn check_for_updates(&mut self, manual: bool) {
@@ -1385,6 +1409,8 @@ impl SimplewallApp {
                         changed |= ui.checkbox(&mut s.allow_loopback, t("Allow loopback connections for all")).changed();
                         changed |= ui.checkbox(&mut s.allow_ipv6, t("Allow IPv6 redirections (6to4) for all")).changed();
                         changed |= ui.checkbox(&mut s.allow_lan, "Allow local network (LAN)").changed();
+                        let mut wu_fix = s.wu_fix;
+                        let wu_toggled = ui.checkbox(&mut wu_fix, t("Allow Windows Update")).changed();
                         ui.separator();
                         changed |= ui.checkbox(&mut s.block_outbound, t("Block outbound connections for all")).changed();
                         changed |= ui.checkbox(&mut s.block_inbound, t("Block inbound connections for all")).changed();
@@ -1405,7 +1431,9 @@ impl SimplewallApp {
                             ui.close_menu();
                             self.dialog = Some(Dialog::Settings);
                         }
-                        if changed {
+                        if wu_toggled {
+                            self.set_wu_fix(wu_fix);
+                        } else if changed {
                             self.changed();
                         } else if format_changed {
                             // Rewrite the profile in the new format right away.
@@ -1914,6 +1942,13 @@ impl SimplewallApp {
                     self.inspector.reset_signatures();
                     self.dirty = true;
                 }
+                if before.wu_fix != after.wu_fix {
+                    let on = after.wu_fix;
+                    // Applied by set_wu_fix, which keeps the old value if the change fails.
+                    self.profile.settings.wu_fix = before.wu_fix;
+                    self.set_wu_fix(on);
+                }
+                let after = &self.profile.settings;
                 if before.language != after.language {
                     crate::i18n::set_language(&after.language);
                     theme::install_fonts(ctx, &after.language);

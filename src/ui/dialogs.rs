@@ -607,6 +607,10 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                         filters |= ui.checkbox(&mut s.allow_loopback, t("Allow loopback connections for all")).changed();
                         filters |= ui.checkbox(&mut s.allow_ipv6, t("Allow IPv6 redirections (6to4) for all")).changed();
                         filters |= ui.checkbox(&mut s.allow_lan, "Allow local network (LAN)").changed();
+                        saved |= ui
+                            .checkbox(&mut s.wu_fix, t("Allow Windows Update"))
+                            .on_hover_text("Runs the Windows Update services from wusvc.exe, a copy of svchost.exe, and allows it.")
+                            .changed();
                         filters |= ui
                             .checkbox(&mut s.user_allows_override_blocklist, "User rules take priority over the blocklist")
                             .changed();

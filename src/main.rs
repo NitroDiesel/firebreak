@@ -18,6 +18,7 @@ mod swc;
 mod tray;
 mod ui;
 mod update;
+mod wufix;
 mod wfp;
 
 use windows::core::PCWSTR;

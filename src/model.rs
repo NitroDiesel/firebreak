@@ -306,6 +306,8 @@ settings! {
     /// AllowIpForwarding: leave forwarded traffic alone in the boot-time filters
     /// (Mobile Hotspot, Internet Connection Sharing, NAT for VMs).
     allow_ip_forwarding: bool = false,
+    /// IsWUFixEnabled: run the Windows Update services from their own svchost copy (wusvc.exe).
+    wu_fix: bool = false,
     /// IsInternalRulesDisabled: install only the user's own rules.
     internal_rules_disabled: bool = false,
     // Same defaults as BlocklistSpyState / UpdateState / ExtraState in db.c.
