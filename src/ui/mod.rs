@@ -17,7 +17,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, emath::easing, pos2, vec2, Align, Color32, CornerRadius, Event, FontId, Id, Key, Layout,
+    self, emath::easing, pos2, vec2, Align, Color32, CornerRadius, Event, Id, Key, Layout,
     Margin, Modifiers, Rangef, Rect, Response, Sense, Stroke, TextureHandle, Ui,
 };
 
@@ -143,6 +143,9 @@ pub struct SimplewallApp {
     collapsed: [HashSet<u8>; 8],
     selected: [Option<usize>; 8],
     lines: Vec<Line>,
+    /// Measured column widths for Autosize columns, refreshed after each rebuild.
+    auto_widths: Vec<f32>,
+    widths_stale: bool,
     dirty: bool,
     scroll_to: Option<usize>,
     unused: usize,
@@ -227,7 +230,8 @@ impl SimplewallApp {
             _ => theme::system_is_dark(),
         };
         crate::i18n::set_language(&profile.settings.language);
-        theme::apply(ctx, accent, dark, profile.settings.theme == 0, &profile.settings.language);
+        let s = &profile.settings;
+        theme::apply(ctx, accent, dark, s.theme == 0, &s.language, &s.font, s.font_size);
         let (width, height) = (profile.settings.window_width, profile.settings.window_height);
         if width >= 640 && height >= 400 {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(vec2(width as f32, height as f32)));
@@ -255,6 +259,8 @@ impl SimplewallApp {
             collapsed: Default::default(),
             selected: [None; 8],
             lines: Vec::new(),
+            auto_widths: Vec::new(),
+            widths_stale: true,
             dirty: true,
             scroll_to: None,
             unused: 0,
@@ -463,6 +469,7 @@ impl SimplewallApp {
             traffic: self.admin,
         };
         self.lines = view::build(self.tab, &source);
+        self.widths_stale = true;
         self.unused = self.profile.apps.iter().filter(|a| self.profile.app_is_unused(a)).count();
         self.timers = self.profile.apps.iter().filter(|a| a.has_timer()).count();
         self.dirty = false;
@@ -842,6 +849,26 @@ impl SimplewallApp {
         } else if save {
             self.save();
         }
+    }
+
+    /// View > Font: pick the window font and size, as the C build's IDM_FONT does.
+    fn choose_font(&mut self, ctx: &egui::Context) {
+        let s = &self.profile.settings;
+        let Some((face, size)) = shell::choose_font(&s.font, s.font_size) else {
+            return;
+        };
+        if shell::font_file(&face).is_none() {
+            self.notify(format!("The font file for {face} was not found; Segoe UI stays."), true);
+            return;
+        }
+        let s = &mut self.profile.settings;
+        s.font = face;
+        s.font_size = size;
+        theme::install_fonts(ctx, &s.language, &s.font);
+        theme::set_text_size(ctx, s.font_size);
+        self.widths_stale = true;
+        self.save();
+        self.dirty = true;
     }
 
     /// IsWUFixEnabled: move the update services to wusvc.exe and allow it, as
@@ -1298,7 +1325,11 @@ impl SimplewallApp {
         let selected = self.selected[self.tab.index()];
         for action in actions {
             match action {
-                Action::Find => ctx.memory_mut(|m| m.request_focus(Id::new(FIND_ID))),
+                Action::Find => {
+                    // Ctrl+F brings a hidden search bar back.
+                    self.profile.settings.show_search_bar = true;
+                    ctx.memory_mut(|m| m.request_focus(Id::new(FIND_ID)));
+                }
                 Action::Refresh => self.refresh(),
                 Action::Settings => self.dialog = Some(Dialog::Settings),
                 Action::About => self.dialog = Some(Dialog::About),
@@ -1397,13 +1428,64 @@ impl SimplewallApp {
                             self.purge_timers();
                         }
                     });
+                    // The C build's View menu.
                     ui.menu_button(t("View"), |ui| {
+                        let mut language = None;
+                        let mut pick_font = false;
                         let s = &mut self.profile.settings;
                         let mut save = ui.checkbox(&mut s.always_on_top, t("Always on top")).changed();
-                        save |=ui.checkbox(&mut s.show_filenames_only, t("Show filenames only")).changed();
+                        let mut dark = self.dark;
+                        if ui.checkbox(&mut dark, t("Use dark theme")).changed() {
+                            s.theme = if dark { 1 } else { 2 };
+                            save = true;
+                        }
+                        save |= ui.checkbox(&mut s.autosize_columns, t("Autosize columns")).changed();
+                        save |= ui.checkbox(&mut s.show_filenames_only, t("Show filenames only")).changed();
+                        if ui.checkbox(&mut s.show_search_bar, t("Show search bar")).changed() {
+                            // A hidden search must not keep filtering the list.
+                            if !s.show_search_bar {
+                                self.query.clear();
+                            }
+                            save = true;
+                        }
+                        ui.separator();
+                        ui.menu_button(t("Icons"), |ui| {
+                            for (value, label) in [(0, t("Details")), (1, t("Icons")), (2, t("Tiles"))] {
+                                save |= ui.radio_value(&mut s.view_type, value, label).changed();
+                            }
+                            ui.separator();
+                            for (value, label) in [(0, t("Small")), (1, t("Large")), (2, t("Extra large"))] {
+                                save |= ui.radio_value(&mut s.icon_size, value, label).changed();
+                            }
+                            ui.separator();
+                            save |= ui.checkbox(&mut s.hide_icons, t("Do not load icons")).changed();
+                        });
+                        ui.menu_button(t("Language"), |ui| {
+                            let current = if s.language.is_empty() { "English" } else { s.language.as_str() };
+                            for name in crate::i18n::languages() {
+                                if ui.radio(current == name, name).clicked() {
+                                    language = Some(if name == "English" { String::new() } else { name.to_string() });
+                                    ui.close_menu();
+                                }
+                            }
+                        });
+                        ui.separator();
+                        if ui.button(format!("{}\u{2026}", t("Font"))).clicked() {
+                            ui.close_menu();
+                            pick_font = true;
+                        }
+                        if let Some(language) = language.filter(|l| *l != s.language) {
+                            s.language = language;
+                            crate::i18n::set_language(&s.language);
+                            theme::install_fonts(ui.ctx(), &s.language, &s.font);
+                            save = true;
+                        }
                         if save {
                             self.save();
                             self.dirty = true;
+                        }
+                        if pick_font {
+                            self.choose_font(ui.ctx());
                         }
                     });
                     ui.menu_button(t("Settings"), |ui| {
@@ -1542,9 +1624,11 @@ impl SimplewallApp {
                         self.dialog = Some(Dialog::Confirm(Ask::ClearLog));
                     }
 
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        self.search_box(ui);
-                    });
+                    if self.profile.settings.show_search_bar {
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            self.search_box(ui);
+                        });
+                    }
                 });
             });
     }
@@ -1621,7 +1705,7 @@ impl SimplewallApp {
                         let galleys: Vec<_> = Tab::ALL
                             .iter()
                             .map(|tab| {
-                                let font = FontId::proportional(13.0);
+                                let font = theme::body(13.0);
                                 ui.painter().layout_no_wrap(tab.label().into(), font, theme::text())
                             })
                             .collect();
@@ -1715,7 +1799,7 @@ impl SimplewallApp {
                 let painter = ui.painter();
                 let y = full.center().y;
                 painter.circle_filled(pos2(full.left() + 4.0, y), 3.5, dot);
-                let galley = painter.layout_no_wrap(text, FontId::proportional(12.5), color);
+                let galley = painter.layout_no_wrap(text, theme::body(12.5), color);
                 painter.galley(pos2(full.left() + 16.0, y - galley.size().y / 2.0), galley, color);
                 let parts = [
                     format!("{}: {}", t("Unused apps"), self.unused),
@@ -1724,7 +1808,7 @@ impl SimplewallApp {
                 for (i, label) in parts.into_iter().enumerate() {
                     let x = full.left() + first + part * i as f32;
                     painter.vline(x, full.top() + 6.0..=full.bottom() - 6.0, Stroke::new(1.0_f32, theme::border()));
-                    let galley = painter.layout_no_wrap(label, FontId::proportional(12.5), theme::text_muted());
+                    let galley = painter.layout_no_wrap(label, theme::body(12.5), theme::text_muted());
                     painter.galley(pos2(x + 10.0, y - galley.size().y / 2.0), galley, theme::text_muted());
                 }
             });
@@ -1758,6 +1842,22 @@ impl SimplewallApp {
     fn list(&mut self, ctx: &egui::Context) {
         let index = self.tab.index();
         let empty = self.empty_text();
+        let columns = self.tab.columns_for(self.admin);
+        let s = &self.profile.settings;
+        if s.autosize_columns && self.widths_stale {
+            self.auto_widths = list::measure_columns(ctx, columns, &self.lines);
+            self.widths_stale = false;
+        }
+        let look = list::Look {
+            view: list::View::from_setting(s.view_type),
+            icon: match s.icon_size {
+                1 => 32.0,
+                2 => 48.0,
+                _ => 16.0,
+            },
+            hide_icons: s.hide_icons,
+            auto_widths: s.autosize_columns.then_some(self.auto_widths.as_slice()),
+        };
         let output = egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(theme::surface()))
             .show(ctx, |ui| {
@@ -1768,12 +1868,13 @@ impl SimplewallApp {
                 };
                 List {
                     id: Id::new(("list", index)),
-                    columns: self.tab.columns_for(self.admin),
+                    columns,
                     lines: &self.lines,
                     sort: self.sorts[index],
                     selected: self.selected[index],
                     scroll_to: self.scroll_to.take(),
                     empty: &empty,
+                    look,
                 }
                 .show(ui, &mut art)
             })
@@ -1954,7 +2055,7 @@ impl SimplewallApp {
                 let after = &self.profile.settings;
                 if before.language != after.language {
                     crate::i18n::set_language(&after.language);
-                    theme::install_fonts(ctx, &after.language);
+                    theme::install_fonts(ctx, &after.language, &after.font);
                     self.dirty = true;
                 }
                 for group in BlocklistGroup::all() {
@@ -2081,7 +2182,7 @@ impl eframe::App for SimplewallApp {
 
 /// Toolbar button: 20px icon, optional label, hover fade, 0.96 press scale.
 fn tool_button(ui: &mut Ui, icon: &TextureHandle, label: Option<&str>, tip: &str, checked: bool, accent: Color32) -> Response {
-    let font = FontId::proportional(13.0);
+    let font = theme::body(13.0);
     let galley = label.map(|l| ui.painter().layout_no_wrap(l.into(), font, theme::text()));
     let width = 10.0 + 20.0 + galley.as_ref().map_or(0.0, |g| 8.0 + g.size().x) + 10.0;
     let (rect, response) = ui.allocate_exact_size(vec2(width, 34.0), Sense::click());

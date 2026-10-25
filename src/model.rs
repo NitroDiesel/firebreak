@@ -361,6 +361,20 @@ settings! {
     always_on_top: bool = false,
     /// ShowFilenames
     show_filenames_only: bool = true,
+    /// ViewType: 0 Details, 1 Icons, 2 Tiles.
+    view_type: u64 = 0,
+    /// IconSize: 0 small, 1 large, 2 extra large.
+    icon_size: u64 = 0,
+    /// IsIconsHidden: "Do not load icons".
+    hide_icons: bool = false,
+    /// AutoSizeColumns: fit fixed columns to their contents.
+    autosize_columns: bool = true,
+    /// IsShowSearchBar
+    show_search_bar: bool = true,
+    /// Font face for the window (Font...); empty means Segoe UI.
+    font: String = String::new(),
+    /// Font size in points; 0 means the default.
+    font_size: u64 = 0,
     /// A section name in simplewall.lng; empty means English.
     language: String = String::new(),
     /// 0 follows Windows, 1 dark, 2 light.

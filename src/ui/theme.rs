@@ -129,7 +129,6 @@ pub const FILL_CONNECTION: Color32 = Color32::from_rgb(0xFF, 0xA8, 0xF2);
 pub const FILL_SYSTEM: Color32 = Color32::from_rgb(0x96, 0xC4, 0xFA);
 pub const FILL_UNDELETE: Color32 = Color32::from_rgb(0xD4, 0xD4, 0xD4);
 
-pub const ROW_HEIGHT: f32 = 24.0;
 pub const SEMIBOLD: &str = "semibold";
 
 /// Windows accent from `HKCU\Software\Microsoft\Windows\DWM\AccentColor`, or a blue default.
@@ -148,23 +147,46 @@ pub fn text_on(fill: Color32) -> Color32 {
     }
 }
 
+/// Text scale from View > Font, as f32 bits (1.0 by default).
+static TEXT_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3F80_0000);
+
+/// A size in points at the chosen text scale.
+pub fn px(size: f32) -> f32 {
+    size * f32::from_bits(TEXT_SCALE.load(Ordering::Relaxed))
+}
+
 pub fn semibold(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name(SEMIBOLD.into()))
+    FontId::new(px(size), FontFamily::Name(SEMIBOLD.into()))
+}
+
+/// Regular text at the chosen text scale.
+pub fn body(size: f32) -> FontId {
+    FontId::proportional(px(size))
+}
+
+/// Text sizes for a font size in points (View > Font); 0 keeps the default,
+/// 13 px body text, which is about Windows' 9 pt at 100% scaling.
+pub fn set_text_size(ctx: &egui::Context, points: u64) {
+    let scale = if points == 0 { 1.0 } else { (points as f32 * 96.0 / 72.0 / 13.0).clamp(0.7, 2.0) };
+    TEXT_SCALE.store(scale.to_bits(), Ordering::Relaxed);
+    ctx.style_mut(|style| {
+        style.text_styles = [
+            (TextStyle::Small, FontId::proportional(11.0 * scale)),
+            (TextStyle::Body, FontId::proportional(13.0 * scale)),
+            (TextStyle::Button, FontId::proportional(13.0 * scale)),
+            (TextStyle::Heading, semibold(17.0)),
+            (TextStyle::Monospace, FontId::monospace(12.5 * scale)),
+        ]
+        .into();
+    });
 }
 
 /// Fonts are loaded once; `set_theme` can run again when the theme changes.
-pub fn apply(ctx: &egui::Context, accent: Color32, dark: bool, follow_system: bool, language: &str) {
-    install_fonts(ctx, language);
+pub fn apply(ctx: &egui::Context, accent: Color32, dark: bool, follow_system: bool, language: &str, face: &str, size: u64) {
+    install_fonts(ctx, language, face);
+    set_text_size(ctx, size);
     set_theme(ctx, accent, dark, follow_system);
     ctx.style_mut(|style| {
-        style.text_styles = [
-            (TextStyle::Small, FontId::proportional(11.0)),
-            (TextStyle::Body, FontId::proportional(13.0)),
-            (TextStyle::Button, FontId::proportional(13.0)),
-            (TextStyle::Heading, semibold(17.0)),
-            (TextStyle::Monospace, FontId::monospace(12.5)),
-        ]
-        .into();
         style.spacing.item_spacing = Vec2::new(8.0, 6.0);
         style.spacing.button_padding = Vec2::new(10.0, 4.0);
         style.spacing.interact_size.y = 26.0;
@@ -249,7 +271,7 @@ pub fn system_is_dark() -> bool {
 
 /// Segoe UI from the system font folder, with egui's bundled font as fallback.
 /// `language` adds the system font that language needs, for scripts Segoe UI lacks.
-pub fn install_fonts(ctx: &egui::Context, language: &str) {
+pub fn install_fonts(ctx: &egui::Context, language: &str, face: &str) {
     let mut fonts = FontDefinitions::default();
     let dir = std::path::PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into()))
         .join("Fonts");
@@ -263,6 +285,12 @@ pub fn install_fonts(ctx: &egui::Context, language: &str) {
     if let Ok(bytes) = std::fs::read(dir.join("seguisb.ttf")) {
         fonts.font_data.insert("segoe-sb".into(), Arc::new(FontData::from_owned(bytes)));
         bold.insert(0, "segoe-sb".into());
+    }
+    // A font picked with View > Font comes first, ahead of Segoe UI.
+    if let Some(bytes) = (!face.is_empty()).then(|| super::shell::font_file(face)).flatten().and_then(|p| std::fs::read(p).ok()) {
+        fonts.font_data.insert("chosen".into(), Arc::new(FontData::from_owned(bytes)));
+        regular.insert(0, "chosen".into());
+        bold.insert(0, "chosen".into());
     }
     // After Segoe UI, before the bundled fallback.
     if let Some(bytes) = crate::i18n::extra_fonts(language).iter().find_map(|name| std::fs::read(dir.join(name)).ok()) {

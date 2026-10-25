@@ -272,3 +272,82 @@ pub fn apps_use_light_theme() -> Option<bool> {
     };
     err.is_ok().then_some(value != 0)
 }
+
+/// The Windows font dialog (View > Font). Returns the face and size in points.
+pub fn choose_font(face: &str, points: u64) -> Option<(String, u64)> {
+    use windows::Win32::Graphics::Gdi::LOGFONTW;
+    use windows::Win32::UI::Controls::Dialogs::{
+        ChooseFontW, CHOOSEFONTW, CF_FORCEFONTEXIST, CF_INITTOLOGFONTSTRUCT, CF_NOVERTFONTS, CF_SCREENFONTS,
+    };
+    let mut font = LOGFONTW::default();
+    let face = if face.is_empty() { "Segoe UI" } else { face };
+    for (slot, ch) in font.lfFaceName.iter_mut().zip(face.encode_utf16().take(31)) {
+        *slot = ch;
+    }
+    // Points to logical pixels at 96 DPI; negative means character height.
+    font.lfHeight = -((if points == 0 { 10 } else { points } as i32) * 96 / 72);
+    let mut dialog = CHOOSEFONTW {
+        lStructSize: std::mem::size_of::<CHOOSEFONTW>() as u32,
+        hwndOwner: unsafe { GetForegroundWindow() },
+        lpLogFont: &mut font,
+        Flags: CF_SCREENFONTS | CF_INITTOLOGFONTSTRUCT | CF_NOVERTFONTS | CF_FORCEFONTEXIST,
+        ..Default::default()
+    };
+    if !unsafe { ChooseFontW(&mut dialog) }.as_bool() {
+        return None;
+    }
+    let name = utf16_prefix(&font.lfFaceName);
+    Some((name, (dialog.iPointSize / 10).max(6) as u64))
+}
+
+/// The file behind an installed font face, from the Fonts registry keys of the
+/// machine and of the user. Collections ("A & B (TrueType)") match either name.
+pub fn font_file(face: &str) -> Option<std::path::PathBuf> {
+    use windows::Win32::System::Registry::{RegCloseKey, RegEnumValueW, RegOpenKeyExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ};
+    let fonts_dir = std::path::PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into())).join("Fonts");
+    let wanted = face.to_lowercase();
+    let key_path = wide(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts");
+    for root in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
+        let mut key = HKEY::default();
+        if unsafe { RegOpenKeyExW(root, PCWSTR(key_path.as_ptr()), None, KEY_READ, &mut key) }.is_err() {
+            continue;
+        }
+        let mut found = None;
+        for index in 0.. {
+            let mut name = [0u16; 512];
+            let mut name_len = name.len() as u32;
+            let mut data = [0u16; 512];
+            let mut data_len = (data.len() * 2) as u32;
+            let status = unsafe {
+                RegEnumValueW(
+                    key,
+                    index,
+                    Some(PWSTR(name.as_mut_ptr())),
+                    &mut name_len,
+                    None,
+                    None,
+                    Some(data.as_mut_ptr() as *mut u8),
+                    Some(&mut data_len),
+                )
+            };
+            if status.is_err() {
+                break;
+            }
+            let label = String::from_utf16_lossy(&name[..name_len as usize]).to_lowercase();
+            let label = label.split(" (").next().unwrap_or(&label).to_string();
+            if label.split(" & ").any(|part| part.trim() == wanted) {
+                let file = utf16_prefix(&data);
+                let path = std::path::PathBuf::from(&file);
+                found = Some(if path.is_absolute() { path } else { fonts_dir.join(file) });
+                break;
+            }
+        }
+        unsafe {
+            let _ = RegCloseKey(key);
+        }
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
