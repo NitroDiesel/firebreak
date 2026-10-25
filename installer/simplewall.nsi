@@ -12,7 +12,7 @@ Icon "simplewall.ico"
 UninstallIcon "simplewall.ico"
 
 !ifndef VERSION
-  !define VERSION "3.9.2"
+  !define VERSION "3.9.3"
 !endif
 
 Name "simplewall"

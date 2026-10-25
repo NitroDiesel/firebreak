@@ -1,6 +1,6 @@
 <!--
   MSI installer for the Rust simplewall port, built with WiX v5 on GitHub Actions:
-    wix build -arch x64 -d Version=3.9.2 installer/simplewall.wxs -o dist/simplewall-3.9.2-setup.msi
+    wix build -arch x64 -d Version=3.9.3 installer/simplewall.wxs -o dist/simplewall-3.9.3-setup.msi
   Filters stay installed after uninstall, as with the NSIS setup. Remove them in the app first.
   Keep UpgradeCode fixed so a newer MSI replaces an older one in place.
 -->
