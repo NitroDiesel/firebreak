@@ -35,9 +35,9 @@ impl Direction {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Outbound => "Outbound",
-            Self::Inbound => "Inbound",
-            Self::Any => "Both",
+            Self::Outbound => crate::i18n::t("Outbound"),
+            Self::Inbound => crate::i18n::t("Inbound"),
+            Self::Any => crate::i18n::t("Both"),
         }
     }
 }
@@ -51,8 +51,8 @@ pub enum RuleAction {
 impl RuleAction {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Permit => "Allow",
-            Self::Block => "Block",
+            Self::Permit => crate::i18n::t("Allow"),
+            Self::Block => crate::i18n::t("Block"),
         }
     }
 }
@@ -90,9 +90,9 @@ impl BlocklistGroup {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Spy => "Microsoft spying and telemetry",
-            Self::Update => "Microsoft update",
-            Self::Extra => "Microsoft applications",
+            Self::Spy => crate::i18n::t("Microsoft spying and telemetry"),
+            Self::Update => crate::i18n::t("Microsoft update"),
+            Self::Extra => crate::i18n::t("Microsoft applications"),
         }
     }
 
@@ -120,9 +120,9 @@ impl BlocklistState {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Disable => "Disable",
-            Self::Allow => "Allow",
-            Self::Block => "Block",
+            Self::Disable => crate::i18n::t("Disable"),
+            Self::Allow => crate::i18n::t("Allow"),
+            Self::Block => crate::i18n::t("Block"),
         }
     }
 
@@ -351,6 +351,8 @@ settings! {
     always_on_top: bool = false,
     /// ShowFilenames
     show_filenames_only: bool = true,
+    /// A section name in simplewall.lng; empty means English.
+    language: String = String::new(),
     /// 0 follows Windows, 1 dark, 2 light.
     theme: u64 = 0,
     /// IsEnableHighlighting: color list rows at all.
@@ -439,7 +441,7 @@ impl Profile {
 
 pub fn protocol_label(protocol: u8) -> &'static str {
     match protocol {
-        0 => "Any",
+        0 => crate::i18n::t("Any"),
         1 => "icmp",
         2 => "igmp",
         6 => "tcp",

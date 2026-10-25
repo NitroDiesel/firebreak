@@ -187,7 +187,7 @@ impl List<'_> {
             }
             let sorted = self.sort.column == index;
             let color = if sorted { theme::text() } else { theme::text_muted() };
-            let galley = single_line(painter, column.title, theme::semibold(12.0), color, width - PAD * 2.0 - 12.0);
+            let galley = single_line(painter, crate::i18n::t(column.title), theme::semibold(12.0), color, width - PAD * 2.0 - 12.0);
             let text_x = if column.right {
                 cell.right() - PAD - galley.size().x
             } else {

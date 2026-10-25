@@ -9,6 +9,7 @@ mod autorun;
 mod cli;
 mod log;
 mod model;
+mod i18n;
 mod netevents;
 mod profile;
 mod rules;

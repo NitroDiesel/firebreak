@@ -11,6 +11,7 @@ mod shell;
 mod theme;
 mod view;
 
+use crate::i18n::t;
 use std::collections::HashSet;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -163,7 +164,7 @@ pub struct SimplewallApp {
     tray_state: TrayState,
     /// Minimized with the taskbar button removed.
     in_tray: bool,
-    /// Go to the tray on the first frame (`-minimized` or "Start minimized").
+    /// Go to the tray on the first frame (`-minimized` or t("Start minimized")).
     start_minimized: bool,
     /// Task Scheduler state, read when Settings first opens.
     startup: Option<dialogs::Startup>,
@@ -225,7 +226,8 @@ impl SimplewallApp {
             2 => false,
             _ => theme::system_is_dark(),
         };
-        theme::apply(ctx, accent, dark, profile.settings.theme == 0);
+        crate::i18n::set_language(&profile.settings.language);
+        theme::apply(ctx, accent, dark, profile.settings.theme == 0, &profile.settings.language);
         let (width, height) = (profile.settings.window_width, profile.settings.window_height);
         if width >= 640 && height >= 400 {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(vec2(width as f32, height as f32)));
@@ -1322,66 +1324,66 @@ impl SimplewallApp {
             .show(ctx, |ui| {
                 egui::menu::bar(ui, |ui| {
                     ui.spacing_mut().button_padding = vec2(8.0, 3.0);
-                    ui.menu_button("File", |ui| {
-                        if ui.button("Add app\u{2026}").clicked() {
+                    ui.menu_button(t("File"), |ui| {
+                        if ui.button(format!("{}\u{2026}", t("Add app"))).clicked() {
                             ui.close_menu();
                             self.add_app();
                         }
-                        if ui.add(egui::Button::new("Settings\u{2026}").shortcut_text("F2")).clicked() {
+                        if ui.add(egui::Button::new(format!("{}\u{2026}", t("Settings"))).shortcut_text("F2")).clicked() {
                             ui.close_menu();
                             self.dialog = Some(Dialog::Settings);
                         }
                         ui.separator();
-                        if ui.button("Import profile\u{2026}").clicked() {
+                        if ui.button(format!("{}\u{2026}", t("Import"))).clicked() {
                             ui.close_menu();
                             self.import_profile();
                         }
-                        if ui.button("Export profile\u{2026}").clicked() {
+                        if ui.button(format!("{}\u{2026}", t("Export"))).clicked() {
                             ui.close_menu();
                             self.export_profile();
                         }
                         ui.separator();
-                        if ui.button("Exit").clicked() {
+                        if ui.button(t("Exit")).clicked() {
                             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                         }
                     });
-                    ui.menu_button("Edit", |ui| {
-                        if ui.add(egui::Button::new("Find\u{2026}").shortcut_text("Ctrl+F")).clicked() {
+                    ui.menu_button(t("Edit"), |ui| {
+                        if ui.add(egui::Button::new(format!("{}\u{2026}", crate::i18n::t_as("Search", "Find"))).shortcut_text("Ctrl+F")).clicked() {
                             ui.close_menu();
                             ui.ctx().memory_mut(|m| m.request_focus(Id::new(FIND_ID)));
                         }
-                        if ui.add(egui::Button::new("Refresh").shortcut_text("F5")).clicked() {
+                        if ui.add(egui::Button::new(t("Refresh")).shortcut_text("F5")).clicked() {
                             ui.close_menu();
                             self.refresh();
                         }
                         ui.separator();
-                        if ui.add(egui::Button::new("Purge unused apps").shortcut_text("Ctrl+Shift+X")).clicked() {
+                        if ui.add(egui::Button::new(t("Purge unused apps")).shortcut_text("Ctrl+Shift+X")).clicked() {
                             ui.close_menu();
                             self.ask_purge_unused();
                         }
-                        if ui.add(egui::Button::new("Purge timers").shortcut_text("Ctrl+Shift+T")).clicked() {
+                        if ui.add(egui::Button::new(t("Purge timers")).shortcut_text("Ctrl+Shift+T")).clicked() {
                             ui.close_menu();
                             self.purge_timers();
                         }
                     });
-                    ui.menu_button("View", |ui| {
+                    ui.menu_button(t("View"), |ui| {
                         let s = &mut self.profile.settings;
-                        let mut save = ui.checkbox(&mut s.always_on_top, "Always on top").changed();
-                        save |=ui.checkbox(&mut s.show_filenames_only, "Show filenames only").changed();
+                        let mut save = ui.checkbox(&mut s.always_on_top, t("Always on top")).changed();
+                        save |=ui.checkbox(&mut s.show_filenames_only, t("Show filenames only")).changed();
                         if save {
                             self.save();
                             self.dirty = true;
                         }
                     });
-                    ui.menu_button("Settings", |ui| {
+                    ui.menu_button(t("Settings"), |ui| {
                         let s = &mut self.profile.settings;
                         let mut changed = false;
-                        changed |= ui.checkbox(&mut s.allow_loopback, "Allow loopback connections").changed();
-                        changed |= ui.checkbox(&mut s.allow_ipv6, "Allow IPv6 neighbor discovery").changed();
+                        changed |= ui.checkbox(&mut s.allow_loopback, t("Allow loopback connections for all")).changed();
+                        changed |= ui.checkbox(&mut s.allow_ipv6, t("Allow IPv6 redirections (6to4) for all")).changed();
                         changed |= ui.checkbox(&mut s.allow_lan, "Allow local network (LAN)").changed();
                         ui.separator();
-                        changed |= ui.checkbox(&mut s.block_outbound, "Block outbound connections").changed();
-                        changed |= ui.checkbox(&mut s.block_inbound, "Block inbound connections").changed();
+                        changed |= ui.checkbox(&mut s.block_outbound, t("Block outbound connections for all")).changed();
+                        changed |= ui.checkbox(&mut s.block_inbound, t("Block inbound connections for all")).changed();
                         changed |= ui.checkbox(&mut s.stealth_mode, "Use stealth mode").changed();
                         ui.separator();
                         changed |= ui
@@ -1396,7 +1398,7 @@ impl SimplewallApp {
                             self.changed();
                         }
                     });
-                    ui.menu_button("Blocklist", |ui| {
+                    ui.menu_button(t("Blocklist"), |ui| {
                         for group in BlocklistGroup::all() {
                             ui.menu_button(group.label(), |ui| {
                                 let mut state = self.profile.settings.blocklist(group);
@@ -1411,12 +1413,12 @@ impl SimplewallApp {
                             });
                         }
                     });
-                    ui.menu_button("Help", |ui| {
-                        if ui.button("Website").clicked() {
+                    ui.menu_button(t("Help"), |ui| {
+                        if ui.button(t("Website")).clicked() {
                             ui.close_menu();
                             shell::open("https://github.com/NitroDiesel/simplewall");
                         }
-                        if ui.button("Check for updates").clicked() {
+                        if ui.button(t("Check for updates")).clicked() {
                             ui.close_menu();
                             self.check_for_updates(true);
                         }
@@ -1426,7 +1428,7 @@ impl SimplewallApp {
                                 shell::open(crate::update::RELEASES_URL);
                             }
                         }
-                        if ui.add(egui::Button::new("About").shortcut_text("F1")).clicked() {
+                        if ui.add(egui::Button::new(t("About")).shortcut_text("F1")).clicked() {
                             ui.close_menu();
                             self.dialog = Some(Dialog::About);
                         }
@@ -1444,9 +1446,9 @@ impl SimplewallApp {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     let accent = self.accent;
                     let (icon, label) = if self.filters_on {
-                        (&self.icons.shield_off, "Disable filtering")
+                        (&self.icons.shield_off, crate::i18n::t_as("Disable filters", "Disable filtering"))
                     } else {
-                        (&self.icons.shield_on, "Enable filtering")
+                        (&self.icons.shield_on, crate::i18n::t_as("Enable filters", "Enable filtering"))
                     };
                     let icon = icon.clone();
                     if tool_button(ui, &icon, Some(label), "Enable or disable filtering", false, accent).clicked() {
@@ -1454,14 +1456,14 @@ impl SimplewallApp {
                     }
                     tool_separator(ui);
                     let plus = self.icons.plus.clone();
-                    if tool_button(ui, &plus, None, "Create rule", false, accent).clicked() {
+                    if tool_button(ui, &plus, None, t("Create rule"), false, accent).clicked() {
                         let apps = self.selected_app_path().into_iter().collect();
                         self.dialog = Some(Dialog::Rule(RuleDraft::new(apps)));
                     }
                     tool_separator(ui);
                     let alert = self.icons.error.clone();
                     let notifications = self.profile.settings.notifications;
-                    if tool_button(ui, &alert, None, "Enable packets notifications", notifications, accent).clicked() {
+                    if tool_button(ui, &alert, None, t("Enable packets notifications"), notifications, accent).clicked() {
                         self.profile.settings.notifications = !notifications;
                         self.save();
                     }
@@ -1522,7 +1524,7 @@ impl SimplewallApp {
     fn search_box(&mut self, ui: &mut Ui) {
         let edit = egui::TextEdit::singleline(&mut self.query)
             .id(Id::new(FIND_ID))
-            .hint_text("Find... (Ctrl+F)")
+            .hint_text(format!("{}... (Ctrl+F)", crate::i18n::t_as("Search", "Find")))
             .desired_width(260.0)
             .margin(Margin { left: 10, right: SEARCH_ICON_GUTTER as i8, top: 6, bottom: 6 });
         let response = ui.add(edit);
@@ -1671,8 +1673,8 @@ impl SimplewallApp {
                 let galley = painter.layout_no_wrap(text, FontId::proportional(12.5), color);
                 painter.galley(pos2(full.left() + 16.0, y - galley.size().y / 2.0), galley, color);
                 let parts = [
-                    format!("Unused apps: {}", self.unused),
-                    format!("Apps with timer: {}", self.timers),
+                    format!("{}: {}", t("Unused apps"), self.unused),
+                    format!("{}: {}", t("Apps with timer"), self.timers),
                 ];
                 for (i, label) in parts.into_iter().enumerate() {
                     let x = full.left() + first + part * i as f32;
@@ -1690,7 +1692,7 @@ impl SimplewallApp {
             }
         }
         if self.worker.busy() {
-            return ("Applying filters\u{2026}".into(), theme::text(), self.accent);
+            return (format!("{}\u{2026}", t("Applying filters")), theme::text(), self.accent);
         }
         if let Some(notice) = &self.notice {
             let color = if notice.error { theme::danger() } else { theme::text() };
@@ -1698,13 +1700,13 @@ impl SimplewallApp {
         }
         if self.filters_on {
             let text = if self.profile.settings.filters_temporary {
-                "Filters are enabled until reboot."
+                t("Filters are enabled until reboot.")
             } else {
-                "Filters are enabled."
+                t("Filters are enabled.")
             };
             (text.into(), theme::text(), Color32::from_rgb(0x6C, 0xCB, 0x5F))
         } else {
-            ("Filters are disabled!".into(), theme::text(), theme::danger())
+            (t("Filters are disabled!").into(), theme::text(), theme::danger())
         }
     }
 
@@ -1794,7 +1796,7 @@ impl SimplewallApp {
                 ui.close_menu();
                 self.toggle(id);
             }
-            ui.menu_button("Timer", |ui| {
+            ui.menu_button(t("Timer"), |ui| {
                 for (seconds, label) in TIMERS {
                     if ui.button(label).clicked() {
                         ui.close_menu();
@@ -1803,7 +1805,7 @@ impl SimplewallApp {
                 }
                 if app.has_timer() {
                     ui.separator();
-                    if ui.button("Disable timer").clicked() {
+                    if ui.button(t("Disable timer")).clicked() {
                         ui.close_menu();
                         // Ending a timer blocks the app again, as `_app_timer_reset` does
                         // (henrypp/simplewall#2159).
@@ -1832,17 +1834,17 @@ impl SimplewallApp {
                 self.changed();
             }
             if matches!(app.kind, AppKind::Regular | AppKind::Service)
-                && ui.add(egui::Button::new("Open file location").shortcut_text("Ctrl+E")).clicked()
+                && ui.add(egui::Button::new(t("Open containing folder")).shortcut_text("Ctrl+E")).clicked()
             {
                 ui.close_menu();
                 self.explore(id);
             }
             ui.separator();
-            if ui.add(egui::Button::new("Copy").shortcut_text("Ctrl+C")).clicked() {
+            if ui.add(egui::Button::new(t("Copy")).shortcut_text("Ctrl+C")).clicked() {
                 ui.close_menu();
                 ui.ctx().copy_text(app.path.clone());
             }
-            if app.kind != AppKind::System && ui.add(egui::Button::new("Delete").shortcut_text("Del")).clicked() {
+            if app.kind != AppKind::System && ui.add(egui::Button::new(t("Delete")).shortcut_text("Del")).clicked() {
                 ui.close_menu();
                 self.delete(id);
             }
@@ -1850,7 +1852,7 @@ impl SimplewallApp {
             let Some(rule) = self.profile.rules.get(id).cloned() else {
                 return;
             };
-            let label = if rule.enabled { "Disable rule" } else { "Enable rule" };
+            let label = if rule.enabled { "Disable rule" } else { t("Enable rule") };
             if ui.add(egui::Button::new(label).shortcut_text("Space")).clicked() {
                 ui.close_menu();
                 self.toggle(id);
@@ -1861,17 +1863,17 @@ impl SimplewallApp {
                 self.open(id);
             }
             ui.separator();
-            if ui.add(egui::Button::new("Copy").shortcut_text("Ctrl+C")).clicked() {
+            if ui.add(egui::Button::new(t("Copy")).shortcut_text("Ctrl+C")).clicked() {
                 ui.close_menu();
                 if let Some(text) = self.copy_text(id) {
                     ui.ctx().copy_text(text);
                 }
             }
-            if rule.origin == RuleOrigin::User && ui.add(egui::Button::new("Delete").shortcut_text("Del")).clicked() {
+            if rule.origin == RuleOrigin::User && ui.add(egui::Button::new(t("Delete")).shortcut_text("Del")).clicked() {
                 ui.close_menu();
                 self.delete(id);
             }
-        } else if ui.add(egui::Button::new("Copy").shortcut_text("Ctrl+C")).clicked() {
+        } else if ui.add(egui::Button::new(t("Copy")).shortcut_text("Ctrl+C")).clicked() {
             ui.close_menu();
             if let Some(text) = self.copy_text(id) {
                 ui.ctx().copy_text(text);
@@ -1896,6 +1898,11 @@ impl SimplewallApp {
                 }
                 if before.check_revocation != after.check_revocation {
                     self.inspector.reset_signatures();
+                    self.dirty = true;
+                }
+                if before.language != after.language {
+                    crate::i18n::set_language(&after.language);
+                    theme::install_fonts(ctx, &after.language);
                     self.dirty = true;
                 }
                 for group in BlocklistGroup::all() {

@@ -1,6 +1,7 @@
 //! Turns the profile and the live tables into list lines for one tab.
 //! Built only when something changes, never per frame.
 
+use crate::i18n::t;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
@@ -38,14 +39,14 @@ impl Tab {
 
     pub fn label(self) -> &'static str {
         match self {
-            Tab::Apps => "Apps",
-            Tab::Services => "Services",
-            Tab::Uwp => "UWP apps",
-            Tab::Blocklist => "Blocklist",
-            Tab::System => "System rules",
-            Tab::User => "User rules",
-            Tab::Connections => "Connections",
-            Tab::Packets => "Packets log",
+            Tab::Apps => t("Apps"),
+            Tab::Services => t("Services"),
+            Tab::Uwp => t("UWP apps"),
+            Tab::Blocklist => t("Blocklist"),
+            Tab::System => t("System rules"),
+            Tab::User => t("User rules"),
+            Tab::Connections => t("Connections"),
+            Tab::Packets => t("Packets log"),
         }
     }
 
@@ -159,18 +160,18 @@ struct Entry {
 pub fn build(tab: Tab, src: &Source) -> Vec<Line> {
     if let Some(kind) = tab.app_kind() {
         let titles = [
-            "Apps with internet access",
-            "Apps with timer",
-            "Apps with user rules",
-            "Apps without internet access",
+            t("Apps with internet access"),
+            t("Apps with timer"),
+            t("Apps with user rules"),
+            t("Apps without internet access"),
         ];
         return grouped(apps(kind, src), &titles, |_| "", src);
     }
     if let Some(origin) = tab.rule_origin() {
-        let titles = ["Enabled rules", "Enabled rules", "Disabled rules"];
+        let titles = [t("Enabled rules"), t("Enabled rules"), t("Disabled rules")];
         let suffix = |group: u8| match group {
-            0 => " [for all]",
-            1 => " [for apps]",
+            0 => t("for all"),
+            1 => t("for apps"),
             _ => "",
         };
         return grouped(rules(origin, src), &titles, suffix, src);
@@ -197,7 +198,10 @@ fn grouped(mut entries: Vec<Entry>, titles: &[&str], suffix: impl Fn(u8) -> &'st
         let collapsed = src.collapsed.contains(&group);
         lines.push(Line::Group {
             id: group,
-            title: format!("{title} ({count}/{total}){}", suffix(group)),
+            title: match suffix(group) {
+                "" => format!("{title} ({count}/{total})"),
+                tag => format!("{title} ({count}/{total}) [{tag}]"),
+            },
             collapsed,
         });
         if !collapsed {
@@ -404,7 +408,7 @@ fn rule_hint(rule: &Rule, valid: bool) -> String {
     }
     let mut apps: Vec<&str> = rule.apps.iter().map(String::as_str).collect();
     if rule.services {
-        apps.insert(0, "Services");
+        apps.insert(0, t("Services"));
     }
     if rule.kernel {
         apps.insert(0, "System");
@@ -413,7 +417,7 @@ fn rule_hint(rule: &Rule, valid: bool) -> String {
         lines.push(format!("Apps: {}", apps.join(", ")));
     }
     if !valid {
-        lines.push("Syntax error in rule!".into());
+        lines.push(t("Syntax error in rule!").into());
     }
     lines.join("\n")
 }

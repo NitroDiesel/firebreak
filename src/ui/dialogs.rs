@@ -1,5 +1,6 @@
 //! Rule editor, app properties, settings, about, and the filtering confirmation.
 
+use crate::i18n::t;
 use eframe::egui::{self, Align, Color32, Layout, RichText, Ui};
 
 use crate::model::{
@@ -126,8 +127,8 @@ pub fn rule_editor(ctx: &egui::Context, draft: &mut RuleDraft, profile: &Profile
     let mut effect = Effect::None;
     let mut open = true;
     let title = match (draft.index, draft.readonly) {
-        (None, _) => "Create rule",
-        (Some(_), true) => "Rule",
+        (None, _) => t("Create rule"),
+        (Some(_), true) => t("Rule"),
         (Some(_), false) => "Edit rule",
     };
     window(title).open(&mut open).default_width(560.0).show(ctx, |ui| {
@@ -139,20 +140,20 @@ pub fn rule_editor(ctx: &egui::Context, draft: &mut RuleDraft, profile: &Profile
             .spacing([14.0, 10.0])
             .min_col_width(80.0)
             .show(ui, |ui| {
-                ui.add_enabled_ui(!readonly, |ui| ui.label("Name"));
+                ui.add_enabled_ui(!readonly, |ui| ui.label(t("Name")));
                 ui.add_enabled(!readonly, egui::TextEdit::singleline(&mut rule.name).desired_width(f32::INFINITY));
                 ui.end_row();
 
-                ui.label("Action");
+                ui.label(t("Action"));
                 ui.add_enabled_ui(!readonly, |ui| {
                     ui.horizontal(|ui| {
-                        ui.radio_value(&mut rule.action, RuleAction::Permit, "Allow");
-                        ui.radio_value(&mut rule.action, RuleAction::Block, "Block");
+                        ui.radio_value(&mut rule.action, RuleAction::Permit, t("Allow"));
+                        ui.radio_value(&mut rule.action, RuleAction::Block, t("Block"));
                     });
                 });
                 ui.end_row();
 
-                ui.label("Direction");
+                ui.label(t("Direction"));
                 ui.add_enabled_ui(!readonly, |ui| {
                     egui::ComboBox::from_id_salt("direction")
                         .selected_text(rule.direction.label())
@@ -165,7 +166,7 @@ pub fn rule_editor(ctx: &egui::Context, draft: &mut RuleDraft, profile: &Profile
                 });
                 ui.end_row();
 
-                ui.label("Protocol");
+                ui.label(t("Protocol"));
                 ui.add_enabled_ui(!readonly, |ui| {
                     egui::ComboBox::from_id_salt("protocol")
                         .selected_text(protocol_label(rule.protocol))
@@ -178,7 +179,7 @@ pub fn rule_editor(ctx: &egui::Context, draft: &mut RuleDraft, profile: &Profile
                 });
                 ui.end_row();
 
-                ui.label("Remote");
+                ui.label(t("Remote"));
                 ui.add_enabled(
                     !readonly,
                     egui::TextEdit::singleline(&mut rule.remote)
@@ -187,7 +188,7 @@ pub fn rule_editor(ctx: &egui::Context, draft: &mut RuleDraft, profile: &Profile
                 );
                 ui.end_row();
 
-                ui.label("Local");
+                ui.label(t("Local"));
                 ui.add_enabled(
                     !readonly,
                     egui::TextEdit::singleline(&mut rule.local)
@@ -199,7 +200,7 @@ pub fn rule_editor(ctx: &egui::Context, draft: &mut RuleDraft, profile: &Profile
 
         ui.add_space(10.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Apps").font(theme::semibold(13.0)));
+            ui.label(RichText::new(t("Apps")).font(theme::semibold(13.0)));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut draft.app_filter)
@@ -209,7 +210,7 @@ pub fn rule_editor(ctx: &egui::Context, draft: &mut RuleDraft, profile: &Profile
             });
         });
         ui.label(
-            RichText::new("If there is no apps selected, then rule will be applied for all apps.")
+            RichText::new(t("If there is no apps selected, then rule will be applied for all apps."))
                 .small()
                 .color(theme::text_muted()),
         );
@@ -232,7 +233,7 @@ pub fn rule_editor(ctx: &egui::Context, draft: &mut RuleDraft, profile: &Profile
                     effect = Effect::Close;
                 }
                 let can_save = problem.is_none() || draft.readonly;
-                let save = egui::Button::new(RichText::new("Save").color(theme::text_on(accent))).fill(accent);
+                let save = egui::Button::new(RichText::new(t("Save")).color(theme::text_on(accent))).fill(accent);
                 if ui.add_enabled(can_save, save).clicked() {
                     let mut rule = draft.rule.clone();
                     rule.name = rule.name.trim().to_string();
@@ -333,7 +334,7 @@ pub fn app_properties(ctx: &egui::Context, index: usize, profile: &mut Profile) 
 
         let item = &mut profile.apps[index];
         egui::Grid::new("app_fields").num_columns(2).spacing([14.0, 10.0]).show(ui, |ui| {
-            ui.label("Comment");
+            ui.label(t("Comments"));
             if ui
                 .add(egui::TextEdit::singleline(&mut item.comment).desired_width(f32::INFINITY))
                 .lost_focus()
@@ -357,7 +358,7 @@ pub fn app_properties(ctx: &egui::Context, index: usize, profile: &mut Profile) 
             }
             ui.end_row();
 
-            ui.label("Timer");
+            ui.label(t("Timer"));
             let current = if item.has_timer() {
                 format!("Until {}", super::shell::format_time(item.timer_until))
             } else {
@@ -384,7 +385,7 @@ pub fn app_properties(ctx: &egui::Context, index: usize, profile: &mut Profile) 
         });
 
         ui.add_space(10.0);
-        ui.label(RichText::new("User rules").font(theme::semibold(13.0)));
+        ui.label(RichText::new(t("User rules")).font(theme::semibold(13.0)));
         let users: Vec<usize> = (0..profile.rules.len())
             .filter(|i| profile.rules[*i].origin == RuleOrigin::User)
             .collect();
@@ -418,11 +419,11 @@ pub fn app_properties(ctx: &egui::Context, index: usize, profile: &mut Profile) 
 
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if app.kind == AppKind::Regular && ui.button("Open file location").clicked() {
+            if app.kind == AppKind::Regular && ui.button(t("Open containing folder")).clicked() {
                 super::shell::reveal(&app.path);
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.button("Close").clicked() {
+                if ui.button(t("Close")).clicked() {
                     effect = Effect::Close;
                 }
             });
@@ -478,14 +479,14 @@ impl Page {
 
     fn label(self) -> &'static str {
         match self {
-            Page::General => "General",
+            Page::General => t("General"),
             Page::Appearance => "Appearance",
             Page::Filters => "Filters",
-            Page::Blocklist => "Blocklist",
-            Page::Security => "Security",
-            Page::Connections => "Connections",
-            Page::Notifications => "Notifications",
-            Page::Logging => "Packets log",
+            Page::Blocklist => t("Blocklist"),
+            Page::Security => t("Security"),
+            Page::Connections => t("Connections"),
+            Page::Notifications => t("Notifications"),
+            Page::Logging => t("Packets log"),
         }
     }
 }
@@ -497,7 +498,7 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
     let mut open = true;
     let page_id = egui::Id::new("settings_page");
     let mut page: Page = ctx.data(|d| d.get_temp(page_id)).unwrap_or_default();
-    window("Settings").open(&mut open).show(ctx, |ui| {
+    window(t("Settings")).open(&mut open).show(ctx, |ui| {
         ui.set_width(620.0);
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
@@ -528,13 +529,13 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                     Page::General => {
                         section(ui, "Startup");
                         let mut autorun = startup.autorun;
-                        if ui.checkbox(&mut autorun, "Load on system startup").changed() {
+                        if ui.checkbox(&mut autorun, t("Load on system startup")).changed() {
                             match crate::autorun::set_autorun(autorun) {
                                 Ok(()) => startup.autorun = autorun,
                                 Err(err) => effect = Effect::Error(err),
                             }
                         }
-                        saved |= ui.checkbox(&mut s.start_minimized, "Start minimized").changed();
+                        saved |= ui.checkbox(&mut s.start_minimized, t("Start minimized")).changed();
                         let mut skip_uac = startup.skip_uac;
                         if ui.checkbox(&mut skip_uac, "Skip UAC warning").changed() {
                             match crate::autorun::set_skip_uac(skip_uac) {
@@ -543,15 +544,29 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                             }
                         }
                         hint(ui, "Both use Task Scheduler with highest privileges, so no UAC prompt appears.");
-                        section(ui, "Apps");
+                        section(ui, t("Language"));
+                        let current = if s.language.is_empty() { "English" } else { s.language.as_str() };
+                        egui::ComboBox::from_id_salt("language")
+                            .selected_text(current.to_string())
+                            .width(220.0)
+                            .show_ui(ui, |ui| {
+                                for name in crate::i18n::languages() {
+                                    let value = if name == "English" { String::new() } else { name.to_string() };
+                                    if ui.selectable_label(s.language == value, name).clicked() && s.language != value {
+                                        s.language = value;
+                                        saved = true;
+                                    }
+                                }
+                            });
+                        section(ui, t("Apps"));
                         saved |= ui
-                            .checkbox(&mut s.app_monitor, "Add programs to the list as they start")
+                            .checkbox(&mut s.app_monitor, t("Monitor apps changing"))
                             .changed();
-                        saved |= ui.checkbox(&mut s.check_updates, "Check for updates once a day").changed();
+                        saved |= ui.checkbox(&mut s.check_updates, t("Periodically check for updates (recommended)")).changed();
                         section(ui, "Window");
-                        saved |= ui.checkbox(&mut s.always_on_top, "Always on top").changed();
-                        saved |= ui.checkbox(&mut s.show_filenames_only, "Show filenames only").changed();
-                        saved |= ui.checkbox(&mut s.confirm_exit, "Ask before exiting while filters are on").changed();
+                        saved |= ui.checkbox(&mut s.always_on_top, t("Always on top")).changed();
+                        saved |= ui.checkbox(&mut s.show_filenames_only, t("Show filenames only")).changed();
+                        saved |= ui.checkbox(&mut s.confirm_exit, t("Show confirmation dialog on exit")).changed();
                         if let Some(path) = crate::profile::user_path() {
                             ui.add_space(10.0);
                             hint(ui, &format!("Profile: {}", path.display()));
@@ -564,7 +579,7 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                                 saved |= ui.radio_value(&mut s.theme, value, label).changed();
                             }
                         });
-                        section(ui, "Highlighting");
+                        section(ui, t("Highlighting"));
                         saved |= ui.checkbox(&mut s.highlighting, "Color list rows").changed();
                         ui.add_enabled_ui(s.highlighting, |ui| {
                             let rows: [(&mut bool, &str, Color32); 6] = [
@@ -585,26 +600,26 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                         });
                     }
                     Page::Filters => {
-                        section(ui, "Allow");
-                        filters |= ui.checkbox(&mut s.allow_loopback, "Allow loopback connections").changed();
-                        filters |= ui.checkbox(&mut s.allow_ipv6, "Allow IPv6 neighbor discovery and 6to4").changed();
+                        section(ui, t("Allow"));
+                        filters |= ui.checkbox(&mut s.allow_loopback, t("Allow loopback connections for all")).changed();
+                        filters |= ui.checkbox(&mut s.allow_ipv6, t("Allow IPv6 redirections (6to4) for all")).changed();
                         filters |= ui.checkbox(&mut s.allow_lan, "Allow local network (LAN)").changed();
                         filters |= ui
                             .checkbox(&mut s.user_allows_override_blocklist, "User rules take priority over the blocklist")
                             .changed();
-                        section(ui, "Block");
-                        filters |= ui.checkbox(&mut s.block_outbound, "Block outbound connections").changed();
-                        filters |= ui.checkbox(&mut s.block_inbound, "Block inbound connections").changed();
+                        section(ui, t("Block"));
+                        filters |= ui.checkbox(&mut s.block_outbound, t("Block outbound connections for all")).changed();
+                        filters |= ui.checkbox(&mut s.block_inbound, t("Block inbound connections for all")).changed();
                         filters |= ui
                             .checkbox(&mut s.stealth_mode, "Use stealth mode (do not answer port scans)")
                             .changed();
                         filters |= ui
-                            .checkbox(&mut s.boot_time_filters, "Install boot-time filters")
+                            .checkbox(&mut s.boot_time_filters, t("Enable boot-time filters"))
                             .on_hover_text("Filter from the moment Windows starts, before the firewall engine loads.")
                             .changed();
                         ui.add_enabled_ui(s.boot_time_filters, |ui| {
                             filters |= ui
-                                .checkbox(&mut s.allow_ip_forwarding, "Allow IP forwarding")
+                                .checkbox(&mut s.allow_ip_forwarding, t("Allow IP forwarding"))
                                 .on_hover_text("Needed for Mobile Hotspot, Internet Connection Sharing, and NAT for virtual machines.")
                                 .changed();
                         });
@@ -614,8 +629,8 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                             .changed();
                     }
                     Page::Blocklist => {
-                        section(ui, "Blocklist");
-                        egui::Grid::new("blocklist").num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
+                        section(ui, t("Blocklist"));
+                        egui::Grid::new(t("blocklist")).num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
                             for group in BlocklistGroup::all() {
                                 ui.label(group.label());
                                 let mut state = s.blocklist(group);
@@ -634,7 +649,7 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                     }
                     Page::Security => {
                         section(ui, "Files");
-                        saved |= ui.checkbox(&mut s.check_signatures, "Check digital signatures").changed();
+                        saved |= ui.checkbox(&mut s.check_signatures, t("Check apps for digital signatures")).changed();
                         ui.add_enabled_ui(s.check_signatures, |ui| {
                             saved |= ui
                                 .checkbox(&mut s.check_revocation, "Check certificate revocation online (slower)")
@@ -643,12 +658,12 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                         hint(ui, "Signed apps are shown in green, with the signer in the tooltip.");
                         ui.add_space(6.0);
                         saved |= ui
-                            .checkbox(&mut s.check_hashes, "Block an allowed app again when its file changes")
+                            .checkbox(&mut s.check_hashes, t("Check apps for sha-256 hash"))
                             .changed();
                         hint(ui, "Takes a SHA-256 of each allowed app and compares it every 10 minutes.");
                     }
                     Page::Connections => {
-                        section(ui, "Connections");
+                        section(ui, t("Connections"));
                         saved |= ui
                             .checkbox(&mut s.network_monitor, "Monitor connections (refresh every 2 seconds)")
                             .changed();
@@ -656,19 +671,19 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                             .checkbox(&mut s.show_wait_connections, "Show connections waiting to close")
                             .changed();
                         saved |= ui
-                            .checkbox(&mut s.resolve_hostnames, "Look up host names for remote addresses")
+                            .checkbox(&mut s.resolve_hostnames, t("Resolve network addresses"))
                             .changed();
                         hint(ui, "Apps with an active connection are shown in pink while monitoring is on.");
                     }
                     Page::Notifications => {
-                        section(ui, "Notifications");
-                        saved |= ui.checkbox(&mut s.notifications, "Enable packets notifications").changed();
+                        section(ui, t("Notifications"));
+                        saved |= ui.checkbox(&mut s.notifications, t("Enable packets notifications")).changed();
                         ui.add_enabled_ui(s.notifications, |ui| {
-                            saved |= ui.checkbox(&mut s.notifications_sound, "Enable notifications sound").changed();
+                            saved |= ui.checkbox(&mut s.notifications_sound, t("Enable notifications sound")).changed();
                             saved |= ui
                                 .checkbox(
                                     &mut s.notifications_fullscreen_silent,
-                                    "Enable silent-mode when full screen app in foreground",
+                                    t("Enable silent-mode when full screen app in foreground"),
                                 )
                                 .changed();
                             ui.horizontal(|ui| {
@@ -681,13 +696,13 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                         hint(ui, "A notification appears when an app that is not allowed tries to connect.");
                     }
                     Page::Logging => {
-                        section(ui, "Packets log");
-                        saved |= ui.checkbox(&mut s.log_to_file, "Enable packets logging to a file").changed();
+                        section(ui, t("Packets log"));
+                        saved |= ui.checkbox(&mut s.log_to_file, t("Enable packets logging to a file")).changed();
                         ui.add_enabled_ui(s.log_to_file, |ui| {
                             ui.horizontal(|ui| {
-                                ui.label("Start the file over at");
+                                ui.label(t("Maximum log size: (kB)"));
                                 saved |= ui
-                                    .add(egui::DragValue::new(&mut s.log_size_limit_kb).range(0..=1_048_576).suffix(" KB"))
+                                    .add(egui::DragValue::new(&mut s.log_size_limit_kb).range(0..=1_048_576))
                                     .changed();
                             });
                         });
@@ -706,7 +721,7 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
         });
         ui.add_space(6.0);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.button("Close").clicked() {
+            if ui.button(t("Close")).clicked() {
                 effect = Effect::Close;
             }
         });
@@ -731,7 +746,7 @@ fn section(ui: &mut Ui, title: &str) {
 pub fn about(ctx: &egui::Context, logo: &egui::TextureHandle) -> Effect {
     let mut effect = Effect::None;
     let mut open = true;
-    window("About").open(&mut open).show(ctx, |ui| {
+    window(t("About")).open(&mut open).show(ctx, |ui| {
         ui.set_width(380.0);
         ui.horizontal(|ui| {
             ui.add(egui::Image::new((logo.id(), egui::vec2(48.0, 48.0))));
@@ -746,7 +761,7 @@ pub fn about(ctx: &egui::Context, logo: &egui::TextureHandle) -> Effect {
         ui.hyperlink_to("github.com/henrypp/simplewall", "https://github.com/henrypp/simplewall");
         ui.add_space(6.0);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.button("Close").clicked() {
+            if ui.button(t("Close")).clicked() {
                 effect = Effect::Close;
             }
         });
@@ -776,13 +791,13 @@ pub fn confirm(ctx: &egui::Context, ask: Ask, accent: Color32) -> Effect {
     let (title, body, action) = match ask {
         Ask::Filters(true) => (
             "Enable filtering?".to_string(),
-            "This will deny network access to apps as defined by the current configuration. Continue?".to_string(),
+            t("This will deny network access to apps as defined by the current configuration. Continue?").to_string(),
             "Enable",
         ),
         Ask::Filters(false) => (
             "Disable filtering?".to_string(),
-            "This will restore network access for all apps that are currently blocked. Continue?".to_string(),
-            "Disable",
+            t("This will restore network access for all apps that are currently blocked. Continue?").to_string(),
+            t("Disable"),
         ),
         Ask::PurgeUnused(count) => (
             format!("Remove {count} unused apps?"),
@@ -796,8 +811,8 @@ pub fn confirm(ctx: &egui::Context, ask: Ask, accent: Color32) -> Effect {
         ),
         Ask::Exit => (
             "Exit simplewall?".to_string(),
-            "Installed filters will continue to work even if you exit. Continue?".to_string(),
-            "Exit",
+            t("Installed filters will continue to work even if you exit. Continue?").to_string(),
+            t("Exit"),
         ),
         Ask::CloseWithTimers(count) => (
             "End running timers?".to_string(),
@@ -812,12 +827,12 @@ pub fn confirm(ctx: &egui::Context, ask: Ask, accent: Color32) -> Effect {
         ui.label(RichText::new(title).font(theme::semibold(16.0)));
         ui.add_space(6.0);
         ui.label(body);
-        // "Do not ask again" for the exit question, as the C build offers.
+        // t("Do not ask again") for the exit question, as the C build offers.
         let quiet_id = egui::Id::new("confirm_quiet");
         let mut quiet = ui.data(|d| d.get_temp::<bool>(quiet_id)).unwrap_or(false);
         if matches!(ask, Ask::Exit) {
             ui.add_space(8.0);
-            ui.checkbox(&mut quiet, "Do not ask again");
+            ui.checkbox(&mut quiet, t("Do not ask again"));
             ui.data_mut(|d| d.insert_temp(quiet_id, quiet));
         }
         ui.add_space(14.0);

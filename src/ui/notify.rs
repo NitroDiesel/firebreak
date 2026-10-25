@@ -4,6 +4,7 @@
 //! It is a separate small always-on-top window above the notification area, so
 //! it appears while the main window sits in the tray.
 
+use crate::i18n::t;
 use eframe::egui::{self, pos2, vec2, Align, Color32, Layout, RichText, Sense, Stroke, ViewportBuilder};
 
 use crate::model::{protocol_label, AppItem};
@@ -110,7 +111,7 @@ pub fn show(ctx: &egui::Context, alert: &Alert, files: &mut FileIcons) -> Action
                     let stroke = Stroke::new(1.5_f32, if close.hovered() { theme::text() } else { theme::text_muted() });
                     ui.painter().line_segment([c + vec2(-4.5, -4.5), c + vec2(4.5, 4.5)], stroke);
                     ui.painter().line_segment([c + vec2(-4.5, 4.5), c + vec2(4.5, -4.5)], stroke);
-                    if close.on_hover_text("Close").clicked() {
+                    if close.on_hover_text(t("Close")).clicked() {
                         action = Action::Dismiss;
                     }
                     if alert.count > 1 {
@@ -139,27 +140,27 @@ pub fn show(ctx: &egui::Context, alert: &Alert, files: &mut FileIcons) -> Action
                     ui.add(egui::Label::new(value).truncate());
                     ui.end_row();
                 };
-                row("File", p.path.clone());
+                row(t("File"), p.path.clone());
                 if let Some(signature) = &alert.signature {
                     let text = match signature {
                         Some(name) if !name.is_empty() => name.clone(),
                         Some(_) => "Valid".into(),
-                        None => "Not signed".into(),
+                        None => t("Not signed").into(),
                     };
-                    row("Signature", text);
+                    row(t("Signature"), text);
                 }
-                row("Address", if p.remote_addr.is_empty() { "—".into() } else { p.remote_addr.clone() });
+                row(t("Address"), if p.remote_addr.is_empty() { "—".into() } else { p.remote_addr.clone() });
                 if let Some(host) = &alert.host {
-                    row("Host", host.clone());
+                    row(t("Host"), host.clone());
                 }
-                row("Port", if p.remote_port == 0 { "—".into() } else { p.remote_port.to_string() });
-                row("Protocol", protocol_label(p.protocol).to_string());
-                row("Date", shell::format_time(p.time));
+                row(t("Port"), if p.remote_port == 0 { "—".into() } else { p.remote_port.to_string() });
+                row(t("Protocol"), protocol_label(p.protocol).to_string());
+                row(t("Date"), shell::format_time(p.time));
             });
 
         ui.add_space(10.0);
         ui.horizontal(|ui| {
-            let allow = egui::Button::new(RichText::new("Allow").color(theme::text_on(alert.accent))).fill(alert.accent);
+            let allow = egui::Button::new(RichText::new(t("Allow")).color(theme::text_on(alert.accent))).fill(alert.accent);
             if ui.add(allow).on_hover_text("Allow network access for this app").clicked() {
                 action = Action::Allow(None);
             }
@@ -171,7 +172,7 @@ pub fn show(ctx: &egui::Context, alert: &Alert, files: &mut FileIcons) -> Action
                     }
                 }
             });
-            if ui.button("Block").on_hover_text("Keep it blocked and stop notifying").clicked() {
+            if ui.button(t("Block")).on_hover_text("Keep it blocked and stop notifying").clicked() {
                 action = Action::Block;
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -184,7 +185,7 @@ pub fn show(ctx: &egui::Context, alert: &Alert, files: &mut FileIcons) -> Action
                         action = Action::CreateRule;
                     }
                     if alert.app.kind == crate::model::AppKind::Regular {
-                        if ui.button("Open file location").clicked() {
+                        if ui.button(t("Open containing folder")).clicked() {
                             ui.close_menu();
                             action = Action::Reveal;
                         }

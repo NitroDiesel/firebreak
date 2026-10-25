@@ -153,8 +153,8 @@ pub fn semibold(size: f32) -> FontId {
 }
 
 /// Fonts are loaded once; `set_theme` can run again when the theme changes.
-pub fn apply(ctx: &egui::Context, accent: Color32, dark: bool, follow_system: bool) {
-    install_fonts(ctx);
+pub fn apply(ctx: &egui::Context, accent: Color32, dark: bool, follow_system: bool, language: &str) {
+    install_fonts(ctx, language);
     set_theme(ctx, accent, dark, follow_system);
     ctx.style_mut(|style| {
         style.text_styles = [
@@ -248,7 +248,8 @@ pub fn system_is_dark() -> bool {
 }
 
 /// Segoe UI from the system font folder, with egui's bundled font as fallback.
-fn install_fonts(ctx: &egui::Context) {
+/// `language` adds the system font that language needs, for scripts Segoe UI lacks.
+pub fn install_fonts(ctx: &egui::Context, language: &str) {
     let mut fonts = FontDefinitions::default();
     let dir = std::path::PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into()))
         .join("Fonts");
@@ -262,6 +263,14 @@ fn install_fonts(ctx: &egui::Context) {
     if let Ok(bytes) = std::fs::read(dir.join("seguisb.ttf")) {
         fonts.font_data.insert("segoe-sb".into(), Arc::new(FontData::from_owned(bytes)));
         bold.insert(0, "segoe-sb".into());
+    }
+    // After Segoe UI, before the bundled fallback.
+    if let Some(bytes) = crate::i18n::extra_fonts(language).iter().find_map(|name| std::fs::read(dir.join(name)).ok()) {
+        fonts.font_data.insert("script".into(), Arc::new(FontData::from_owned(bytes)));
+        for family in [&mut regular, &mut bold] {
+            let at = usize::from(!family.is_empty() && family[0].starts_with("segoe"));
+            family.insert(at.min(family.len()), "script".into());
+        }
     }
     fonts.families.insert(FontFamily::Proportional, regular);
     fonts.families.insert(FontFamily::Name(SEMIBOLD.into()), bold);

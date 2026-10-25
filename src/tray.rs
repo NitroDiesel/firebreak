@@ -7,6 +7,7 @@
 //! windows, which would stop timers and notifications. "In the tray" means
 //! minimized with its taskbar button removed.
 
+use crate::i18n::t;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Mutex, OnceLock};
@@ -394,34 +395,34 @@ unsafe fn context_menu(hwnd: HWND, shared: &Shared) -> Option<TrayCommand> {
         let _ = AppendMenuW(m, MF_SEPARATOR, 0, PCWSTR::null());
     };
 
-    add(menu, MF_STRING, ID_SHOW, "Show/Hide");
+    add(menu, MF_STRING, ID_SHOW, t("Show/Hide"));
     sep(menu);
-    let filters = if state.filters_on { "Disable filters" } else { "Enable filters" };
+    let filters = if state.filters_on { t("Disable filters") } else { t("Enable filters") };
     let busy = if state.busy { MF_GRAYED } else { MF_STRING };
     add(menu, MF_STRING | busy, id_of(TrayCommand::ToggleFilters), filters);
     sep(menu);
-    add(notify, check(state.notifications), id_of(TrayCommand::Notifications), "Enable packets notifications");
+    add(notify, check(state.notifications), id_of(TrayCommand::Notifications), t("Enable packets notifications"));
     let off = if state.notifications { MF_STRING } else { MF_GRAYED };
-    add(notify, check(state.sound) | off, id_of(TrayCommand::NotificationSound), "Enable notifications sound");
+    add(notify, check(state.sound) | off, id_of(TrayCommand::NotificationSound), t("Enable notifications sound"));
     add(
         notify,
         check(state.fullscreen_silent) | off,
         id_of(TrayCommand::FullscreenSilent),
-        "Enable silent-mode when full screen app in foreground",
+        t("Enable silent-mode when full screen app in foreground"),
     );
-    add(menu, MF_POPUP, notify.0 as usize, "Notifications");
-    add(log, check(state.log_file), id_of(TrayCommand::LogFile), "Enable packets logging to a file");
+    add(menu, MF_POPUP, notify.0 as usize, t("Notifications"));
+    add(log, check(state.log_file), id_of(TrayCommand::LogFile), t("Enable packets logging to a file"));
     add(log, check(state.log_ui), id_of(TrayCommand::LogUi), "Enable packets logging interface (session only)");
     sep(log);
-    add(log, MF_STRING, id_of(TrayCommand::ShowLog), "Show log");
-    add(log, MF_STRING, id_of(TrayCommand::ClearLog), "Clear log");
-    add(menu, MF_POPUP, log.0 as usize, "Packets log");
+    add(log, MF_STRING, id_of(TrayCommand::ShowLog), t("Show log"));
+    add(log, MF_STRING, id_of(TrayCommand::ClearLog), t("Clear log"));
+    add(menu, MF_POPUP, log.0 as usize, t("Packets log"));
     sep(menu);
-    add(menu, MF_STRING, id_of(TrayCommand::Settings), "Settings...");
-    add(menu, MF_STRING, id_of(TrayCommand::Website), "Website");
-    add(menu, MF_STRING, id_of(TrayCommand::About), "About");
+    add(menu, MF_STRING, id_of(TrayCommand::Settings), &format!("{}...", t("Settings")));
+    add(menu, MF_STRING, id_of(TrayCommand::Website), t("Website"));
+    add(menu, MF_STRING, id_of(TrayCommand::About), t("About"));
     sep(menu);
-    add(menu, MF_STRING, id_of(TrayCommand::Exit), "Exit");
+    add(menu, MF_STRING, id_of(TrayCommand::Exit), t("Exit"));
 
     let mut point = POINT::default();
     let _ = GetCursorPos(&mut point);
