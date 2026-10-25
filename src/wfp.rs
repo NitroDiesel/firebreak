@@ -25,8 +25,9 @@ use crate::model::{AppItem, AppKind, Direction, Profile, Rule, RuleAction, RuleO
 use crate::rules::{self, PortSpec, Token};
 
 const AUTH_WINNT: u32 = 10;
-/// Above everything else (FWW_HIGHEST): stealth mode.
-const WEIGHT_HIGHEST: u8 = 0x10;
+/// Stealth mode. A FWP_UINT8 weight must be 0 to 15, so this is the top value;
+/// nothing else at that weight shares the ICMP error and discard layers.
+const WEIGHT_HIGHEST: u8 = 0x0F;
 const WEIGHT_IMPORTANT: u8 = 0x0F;
 /// Above the blocklist, so a user allow can punch through it (issue 2073).
 const WEIGHT_USER_OVERRIDE: u8 = 0x0E;
@@ -234,13 +235,14 @@ unsafe fn provider_present(engine: HANDLE) -> bool {
     }
 }
 
+/// Delete every filter of our provider, then the sublayer and provider. Filters
+/// are enumerated without a template and matched here, as the C build does: a
+/// template returns only filters whose action is in its `actionMask`.
 unsafe fn remove_owned(engine: HANDLE) -> Result<(), String> {
     let mut keys = Vec::new();
-    let mut template = FWPM_FILTER_ENUM_TEMPLATE0::default();
-    let mut provider = provider_guid();
-    template.providerKey = &mut provider;
+    let provider = provider_guid();
     let mut enum_handle = HANDLE::default();
-    if FwpmFilterCreateEnumHandle0(engine, Some(&template), &mut enum_handle) == 0 {
+    if FwpmFilterCreateEnumHandle0(engine, None, &mut enum_handle) == 0 {
         loop {
             let mut entries = std::ptr::null_mut();
             let mut returned = 0u32;
@@ -252,7 +254,7 @@ unsafe fn remove_owned(engine: HANDLE) -> Result<(), String> {
             }
             for i in 0..returned as usize {
                 let filter = *entries.add(i);
-                if !filter.is_null() {
+                if !filter.is_null() && !(*filter).providerKey.is_null() && *(*filter).providerKey == provider {
                     keys.push((*filter).filterKey);
                 }
             }
