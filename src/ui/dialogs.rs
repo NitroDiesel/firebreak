@@ -116,11 +116,101 @@ impl RuleDraft {
     }
 }
 
-fn window(title: &str) -> egui::Window<'_> {
-    egui::Window::new(title)
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+/// Space between a dialog and the window edge.
+const DIALOG_INSET: f32 = 24.0;
+const DIALOG_MARGIN: f32 = 16.0;
+/// Title row (26), its spacing, the gap under it, and the frame stroke.
+const DIALOG_TITLE: f32 = 54.0;
+/// The gap above the footer and its row of buttons.
+const DIALOG_FOOTER: f32 = 42.0;
+
+/// The part of a dialog its closure is asked to draw.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Part {
+    /// Scrolls when the window is too small for it.
+    Body,
+    /// The buttons, always in view under the body.
+    Footer,
+}
+
+/// A dialog over the main window. It is modal, as in the C build: keyboard
+/// focus stays inside and the window behind does not react. Escape and the
+/// close button close it. It is `width` wide, or narrower in a small window.
+/// `add` draws the body, which scrolls when it does not fit, then the footer.
+fn dialog(ctx: &egui::Context, title: &str, width: f32, open: &mut bool, mut add: impl FnMut(&mut Ui, Part)) {
+    let screen = ctx.screen_rect().shrink(DIALOG_INSET);
+    let frame = egui::Frame::window(&ctx.style()).inner_margin(DIALOG_MARGIN as i8);
+    let id = egui::Id::new("dialog").with(title);
+    // An area lays out inside last frame's size, starting from 600 x 400; starting
+    // from the whole window lets a tall dialog measure itself instead of scrolling.
+    let area = egui::Modal::default_area(id).default_size(screen.size());
+    let modal = egui::Modal::new(id)
+        .area(area)
+        .frame(frame)
+        .backdrop_color(Color32::from_black_alpha(if theme::is_dark() { 90 } else { 40 }))
+        .show(ctx, |ui| {
+            ui.set_width(width.min(screen.width() - DIALOG_MARGIN * 2.0));
+            ui.set_max_height(screen.height() - DIALOG_MARGIN * 2.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(title).font(theme::semibold(theme::TITLE)));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if close_button(ui).clicked() {
+                        *open = false;
+                    }
+                });
+            });
+            ui.add_space(8.0);
+            egui::ScrollArea::vertical()
+                .max_height(dialog_room(ui.ctx()))
+                .show(ui, |ui| {
+                    // A gutter, so fields do not run under the scroll bar.
+                    egui::Frame::NONE
+                        .inner_margin(egui::Margin { right: 12, ..Default::default() })
+                        .show(ui, |ui| add(ui, Part::Body));
+                });
+            ui.add_space(10.0);
+            add(ui, Part::Footer);
+        });
+    let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    if escape && modal.is_top_modal && !modal.any_popup_open {
+        *open = false;
+    }
+}
+
+/// Height a dialog can give its body in the current window.
+fn dialog_room(ctx: &egui::Context) -> f32 {
+    ctx.screen_rect().height() - DIALOG_INSET * 2.0 - DIALOG_MARGIN * 2.0 - DIALOG_TITLE - DIALOG_FOOTER
+}
+
+/// The close button in a dialog or notification header: 24 px, named for screen readers.
+pub(super) fn close_button(ui: &mut Ui) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Close")));
+    let lit = response.hovered() || response.has_focus();
+    if lit {
+        ui.painter().rect_filled(rect, 4.0, theme::overlay(1.1));
+    }
+    let c = rect.center();
+    let stroke = egui::Stroke::new(1.5_f32, if lit { theme::text() } else { theme::text_muted() });
+    ui.painter().line_segment([c + egui::vec2(-4.5, -4.5), c + egui::vec2(4.5, 4.5)], stroke);
+    ui.painter().line_segment([c + egui::vec2(-4.5, 4.5), c + egui::vec2(4.5, -4.5)], stroke);
+    response.on_hover_text(t("Close"))
+}
+
+/// A row of buttons aligned to the trailing edge, one line tall.
+fn footer(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    ui.horizontal(|ui| {
+        ui.with_layout(Layout::right_to_left(Align::Center), add);
+    });
+}
+
+/// A footer with only Close.
+fn close_footer(ui: &mut Ui, effect: &mut Effect) {
+    footer(ui, |ui| {
+        if ui.button(t("Close")).clicked() {
+            *effect = Effect::Close;
+        }
+    });
 }
 
 pub fn rule_editor(ctx: &egui::Context, draft: &mut RuleDraft, profile: &Profile, accent: Color32) -> Effect {
@@ -131,8 +221,11 @@ pub fn rule_editor(ctx: &egui::Context, draft: &mut RuleDraft, profile: &Profile
         (Some(_), true) => t("Rule"),
         (Some(_), false) => "Edit rule",
     };
-    window(title).open(&mut open).default_width(560.0).show(ctx, |ui| {
-        ui.set_width(560.0);
+    dialog(ctx, title, 560.0, &mut open, |ui, part| {
+        if part == Part::Footer {
+            rule_footer(ui, draft, accent, &mut effect);
+            return;
+        }
         let readonly = draft.readonly;
         let rule = &mut draft.rule;
         egui::Grid::new("rule_fields")
@@ -200,7 +293,7 @@ pub fn rule_editor(ctx: &egui::Context, draft: &mut RuleDraft, profile: &Profile
 
         ui.add_space(10.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new(t("Apps")).font(theme::semibold(13.0)));
+            ui.label(RichText::new(t("Apps")).font(theme::semibold(theme::BODY)));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut draft.app_filter)
@@ -210,7 +303,10 @@ pub fn rule_editor(ctx: &egui::Context, draft: &mut RuleDraft, profile: &Profile
             });
         });
         ui.label(
-            RichText::new(t("If there is no apps selected, then rule will be applied for all apps."))
+            RichText::new(crate::i18n::t_as(
+                "If there is no apps selected, then rule will be applied for all apps.",
+                "With no apps selected, the rule applies to all apps.",
+            ))
                 .small()
                 .color(theme::text_muted()),
         );
@@ -220,34 +316,35 @@ pub fn rule_editor(ctx: &egui::Context, draft: &mut RuleDraft, profile: &Profile
 
         ui.add_space(8.0);
         ui.checkbox(&mut draft.rule.enabled, "Enable this rule");
-
-        let problem = draft.problem();
-        ui.add_space(6.0);
-        ui.separator();
-        ui.horizontal(|ui| {
-            if let Some(problem) = &problem {
-                ui.label(RichText::new(problem).color(theme::danger()));
-            }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.button("Cancel").clicked() {
-                    effect = Effect::Close;
-                }
-                let can_save = problem.is_none() || draft.readonly;
-                let save = egui::Button::new(RichText::new(t("Save")).color(theme::text_on(accent))).fill(accent);
-                if ui.add_enabled(can_save, save).clicked() {
-                    let mut rule = draft.rule.clone();
-                    rule.name = rule.name.trim().to_string();
-                    rule.remote = rule.remote.trim().to_string();
-                    rule.local = rule.local.trim().to_string();
-                    effect = Effect::SaveRule(Box::new(rule), draft.index);
-                }
-            });
-        });
     });
     if !open {
         effect = Effect::Close;
     }
     effect
+}
+
+/// Why the rule cannot be saved, then Cancel and Save.
+fn rule_footer(ui: &mut Ui, draft: &RuleDraft, accent: Color32, effect: &mut Effect) {
+    let problem = draft.problem();
+    ui.horizontal(|ui| {
+        if let Some(problem) = &problem {
+            ui.label(RichText::new(problem).color(theme::danger()));
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if ui.button("Cancel").clicked() {
+                *effect = Effect::Close;
+            }
+            let can_save = problem.is_none() || draft.readonly;
+            let save = egui::Button::new(RichText::new(t("Save")).color(theme::text_on(accent))).fill(accent);
+            if ui.add_enabled(can_save, save).clicked() {
+                let mut rule = draft.rule.clone();
+                rule.name = rule.name.trim().to_string();
+                rule.remote = rule.remote.trim().to_string();
+                rule.local = rule.local.trim().to_string();
+                *effect = Effect::SaveRule(Box::new(rule), draft.index);
+            }
+        });
+    });
 }
 
 fn app_checklist(ui: &mut Ui, rule: &mut Rule, profile: &Profile, filter: &str, readonly: bool) {
@@ -257,8 +354,10 @@ fn app_checklist(ui: &mut Ui, rule: &mut Rule, profile: &Profile, filter: &str, 
         .corner_radius(6)
         .inner_margin(6)
         .show(ui, |ui| {
+            // Shorter in a small window, so the editor keeps its buttons in view.
+            let height = (dialog_room(ui.ctx()) - 330.0).clamp(72.0, 190.0);
             egui::ScrollArea::vertical()
-                .max_height(190.0)
+                .max_height(height)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.add_enabled_ui(!readonly, |ui| {
@@ -326,10 +425,25 @@ pub fn app_properties(ctx: &egui::Context, index: usize, profile: &mut Profile) 
     let Some(app) = profile.apps.get(index).cloned() else {
         return Effect::Close;
     };
-    window("App").open(&mut open).show(ctx, |ui| {
-        ui.set_width(480.0);
-        ui.label(RichText::new(&app.display_name).font(theme::semibold(16.0)));
-        ui.label(RichText::new(&app.path).small().color(theme::text_muted()));
+    dialog(ctx, "App", 480.0, &mut open, |ui, part| {
+        if part == Part::Footer {
+            ui.horizontal(|ui| {
+                if app.kind == AppKind::Regular && ui.button(t("Open containing folder")).clicked() {
+                    super::shell::reveal(&app.path);
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.button(t("Close")).clicked() {
+                        effect = Effect::Close;
+                    }
+                });
+            });
+            return;
+        }
+        ui.label(RichText::new(&app.display_name).font(theme::semibold(theme::TITLE)));
+        // System and services show a name only; their "path" repeats it.
+        if !app.path.eq_ignore_ascii_case(&app.display_name) {
+            ui.label(RichText::new(&app.path).small().color(theme::text_muted()));
+        }
         ui.add_space(10.0);
 
         let item = &mut profile.apps[index];
@@ -385,7 +499,7 @@ pub fn app_properties(ctx: &egui::Context, index: usize, profile: &mut Profile) 
         });
 
         ui.add_space(10.0);
-        ui.label(RichText::new(t("User rules")).font(theme::semibold(13.0)));
+        ui.label(RichText::new(t("User rules")).font(theme::semibold(theme::BODY)));
         let users: Vec<usize> = (0..profile.rules.len())
             .filter(|i| profile.rules[*i].origin == RuleOrigin::User)
             .collect();
@@ -417,17 +531,6 @@ pub fn app_properties(ctx: &egui::Context, index: usize, profile: &mut Profile) 
                 });
             });
 
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if app.kind == AppKind::Regular && ui.button(t("Open containing folder")).clicked() {
-                super::shell::reveal(&app.path);
-            }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.button(t("Close")).clicked() {
-                    effect = Effect::Close;
-                }
-            });
-        });
     });
     if !open {
         effect = Effect::Close;
@@ -498,8 +601,13 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
     let mut open = true;
     let page_id = egui::Id::new("settings_page");
     let mut page: Page = ctx.data(|d| d.get_temp(page_id)).unwrap_or_default();
-    window(t("Settings")).open(&mut open).show(ctx, |ui| {
-        ui.set_width(620.0);
+    // The page keeps one height, so the dialog does not jump between pages.
+    let page_height = (dialog_room(ctx) - 24.0).clamp(160.0, 400.0);
+    dialog(ctx, t("Settings"), 620.0, &mut open, |ui, part| {
+        if part == Part::Footer {
+            close_footer(ui, &mut effect);
+            return;
+        }
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.set_width(140.0);
@@ -512,18 +620,18 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                 }
             });
             // A fixed-height divider; ui.separator() here would stretch the window to the screen.
-            let (line, _) = ui.allocate_exact_size(egui::vec2(9.0, 400.0), egui::Sense::hover());
+            let (line, _) = ui.allocate_exact_size(egui::vec2(9.0, page_height), egui::Sense::hover());
             ui.painter().vline(line.center().x, line.y_range(), egui::Stroke::new(1.0_f32, theme::border()));
             ui.vertical(|ui| {
-                ui.set_width(450.0);
+                ui.set_width(ui.available_width());
                 let s = &mut profile.settings;
                 let mut filters = false;
                 let mut saved = false;
                 // A fixed height, so the window does not jump between pages or outgrow the main window.
                 egui::ScrollArea::vertical()
                     .id_salt(page.label())
-                    .min_scrolled_height(400.0)
-                    .max_height(400.0)
+                    .min_scrolled_height(page_height)
+                    .max_height(page_height)
                     .auto_shrink([false, false])
                     .show(ui, |ui| match page {
                     Page::General => {
@@ -734,12 +842,6 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                 }
             });
         });
-        ui.add_space(6.0);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.button(t("Close")).clicked() {
-                effect = Effect::Close;
-            }
-        });
     });
     ctx.data_mut(|d| d.insert_temp(page_id, page));
     if !open {
@@ -754,19 +856,22 @@ fn hint(ui: &mut Ui, text: &str) {
 
 fn section(ui: &mut Ui, title: &str) {
     ui.add_space(6.0);
-    ui.label(RichText::new(title).font(theme::semibold(13.0)).color(theme::text()));
+    ui.label(RichText::new(title).font(theme::semibold(theme::BODY)).color(theme::text()));
     ui.add_space(2.0);
 }
 
 pub fn about(ctx: &egui::Context, logo: &egui::TextureHandle) -> Effect {
     let mut effect = Effect::None;
     let mut open = true;
-    window(t("About")).open(&mut open).show(ctx, |ui| {
-        ui.set_width(380.0);
+    dialog(ctx, t("About"), 380.0, &mut open, |ui, part| {
+        if part == Part::Footer {
+            close_footer(ui, &mut effect);
+            return;
+        }
         ui.horizontal(|ui| {
             ui.add(egui::Image::new((logo.id(), egui::vec2(48.0, 48.0))));
             ui.vertical(|ui| {
-                ui.label(RichText::new(format!("{APP_NAME} {APP_VERSION}")).font(theme::semibold(18.0)));
+                ui.label(RichText::new(format!("{APP_NAME} {APP_VERSION}")).font(theme::semibold(theme::DISPLAY)));
                 ui.label(RichText::new("Rust port of simplewall by Henry++").color(theme::text_muted()));
                 ui.label(RichText::new("GNU General Public License v3").small().color(theme::text_muted()));
             });
@@ -774,12 +879,6 @@ pub fn about(ctx: &egui::Context, logo: &egui::TextureHandle) -> Effect {
         ui.add_space(10.0);
         ui.hyperlink_to("github.com/NitroDiesel/simplewall", "https://github.com/NitroDiesel/simplewall");
         ui.hyperlink_to("github.com/henrypp/simplewall", "https://github.com/henrypp/simplewall");
-        ui.add_space(6.0);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.button(t("Close")).clicked() {
-                effect = Effect::Close;
-            }
-        });
     });
     if !open {
         effect = Effect::Close;
@@ -795,6 +894,8 @@ pub enum Ask {
     /// Purge this many unused apps (henrypp/simplewall#2109: say what it does).
     PurgeUnused(usize),
     ClearLog,
+    /// Delete the app or user rule with this index on the current tab.
+    Delete(usize),
     /// Close while this many app timers are still running.
     CloseWithTimers(usize),
     /// Exit while filters are on (ConfirmExit2).
@@ -807,27 +908,32 @@ pub fn confirm(ctx: &egui::Context, ask: Ask, accent: Color32) -> Effect {
         Ask::Filters(true) => (
             "Enable filtering?".to_string(),
             t("This will deny network access to apps as defined by the current configuration. Continue?").to_string(),
-            "Enable",
+            t("Enable filtering"),
         ),
         Ask::Filters(false) => (
             "Disable filtering?".to_string(),
             t("This will restore network access for all apps that are currently blocked. Continue?").to_string(),
-            t("Disable"),
+            t("Disable filtering"),
         ),
         Ask::PurgeUnused(count) => (
             format!("Remove {count} unused apps?"),
             "This removes apps that are missing from disk, and apps that are not allowed, pinned, or used by any rule. Running apps come back on the next refresh.".to_string(),
-            "Remove",
+            "Remove apps",
         ),
         Ask::ClearLog => (
             "Clear the log?".to_string(),
             "This deletes simplewall.csv and empties the Packets log.".to_string(),
-            "Clear",
+            "Clear log",
         ),
         Ask::Exit => (
             "Exit simplewall?".to_string(),
             t("Installed filters will continue to work even if you exit. Continue?").to_string(),
             t("Exit"),
+        ),
+        Ask::Delete(_) => (
+            t("Delete selected item(s)?").to_string(),
+            "This cannot be undone.".to_string(),
+            t("Delete"),
         ),
         Ask::CloseWithTimers(count) => (
             "End running timers?".to_string(),
@@ -839,7 +945,7 @@ pub fn confirm(ctx: &egui::Context, ask: Ask, accent: Color32) -> Effect {
     };
     let modal = egui::Modal::new(egui::Id::new("confirm")).show(ctx, |ui| {
         ui.set_width(420.0);
-        ui.label(RichText::new(title).font(theme::semibold(16.0)));
+        ui.label(RichText::new(title).font(theme::semibold(theme::TITLE)));
         ui.add_space(6.0);
         ui.label(body);
         // t("Do not ask again") for the exit question, as the C build offers.
@@ -851,7 +957,7 @@ pub fn confirm(ctx: &egui::Context, ask: Ask, accent: Color32) -> Effect {
             ui.data_mut(|d| d.insert_temp(quiet_id, quiet));
         }
         ui.add_space(14.0);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        footer(ui, |ui| {
             let primary = egui::Button::new(RichText::new(action).color(theme::text_on(accent))).fill(accent);
             if ui.add(primary).clicked() {
                 effect = Effect::Accept(ask, matches!(ask, Ask::Exit) && quiet);

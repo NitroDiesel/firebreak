@@ -51,6 +51,9 @@ The layout follows the original: a menu bar (File, Edit, View, Settings, Blockli
   - Gray: a pinned app.
   - Blue: a system app or service.
 - Double-click or Enter opens the rule editor or the app properties. Right-click has timers, pin, open containing folder, copy, and delete.
+- Deleting an app or a user rule asks first. There is no undo.
+- Dialogs keep keyboard focus inside them and close with Escape. In a small window their content scrolls and the buttons stay in view.
+- Tab moves between controls and draws a focus ring around the current one. The arrow keys move through the list.
 - Keyboard shortcuts:
 
   | Keys | Action |
@@ -75,7 +78,9 @@ The layout follows the original: a menu bar (File, Edit, View, Settings, Blockli
   - Show search bar. Ctrl+F shows it again.
   - Details, Icons, or Tiles view, with small, large, or extra-large icons. "Do not load icons" skips reading app icons.
   - Language, and Font..., which picks the window's font and size.
-- The theme is dark, light, or the same as Windows. The accent color follows the Windows accent color.
+- The theme is dark, light, or the same as Windows. The accent color follows the Windows accent color. In the light theme a pale accent is darkened where it is text or a line, so it stays readable.
+- Animations follow Windows' "Animation effects" setting.
+- Errors in the status bar stay until you click them. Hover over a cut-off cell or message to read all of it.
 - The window is in the original's 29 languages (Settings > General > Language), from its language file. Labels worded as in the original are translated; wording new to this port stays English.
 - The last tab, sort order, and window size are kept for next time.
 

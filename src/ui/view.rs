@@ -292,13 +292,14 @@ fn apps(kind: AppKind, src: &Source) -> Vec<Entry> {
         let signer = (profile.settings.check_signatures && app.kind == AppKind::Regular)
             .then(|| src.signers.get(&app.path.to_lowercase()).cloned())
             .flatten();
+        let connected = src.connected.contains(&app.path.to_lowercase());
         // Same order as `_app_getappcolor`: invalid, connection, signed, undeletable, system.
         let h = &profile.settings;
         let fill = if !h.highlighting {
             None
         } else if h.highlight_invalid && !exists {
             Some(theme::FILL_INVALID)
-        } else if h.highlight_connection && src.connected.contains(&app.path.to_lowercase()) {
+        } else if h.highlight_connection && connected {
             Some(theme::FILL_CONNECTION)
         } else if h.highlight_signed && matches!(signer, Some(Some(_))) {
             Some(theme::FILL_SIGNED)
@@ -315,9 +316,11 @@ fn apps(kind: AppKind, src: &Source) -> Vec<Entry> {
             app.display_name.clone()
         };
         let icon = match app.kind {
+            // A missing file shows the error icon too, not only the red fill.
+            AppKind::Regular if !exists => Icon::Error,
             AppKind::Regular => Icon::File {
                 path: app.path.clone(),
-                generic: !exists,
+                generic: false,
             },
             AppKind::System => Icon::File {
                 path: format!(r"{windows}\system32\ntoskrnl.exe"),
@@ -333,6 +336,18 @@ fn apps(kind: AppKind, src: &Source) -> Vec<Entry> {
             },
         };
         let mut hint = app.path.clone();
+        // What the row's fill means, in words.
+        for (on, state) in [
+            (!exists, "File not found"),
+            (connected, "Has an active connection"),
+            (app.pinned, "Pinned"),
+            (system && app.kind == AppKind::Regular, "System file"),
+        ] {
+            if on {
+                hint.push('\n');
+                hint.push_str(state);
+            }
+        }
         if !app.comment.is_empty() {
             hint.push('\n');
             hint.push_str(&app.comment);

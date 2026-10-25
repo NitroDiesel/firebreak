@@ -159,6 +159,8 @@ pub struct SimplewallApp {
     notice: Option<Notice>,
     dialog: Option<Dialog>,
     underline: Option<Underline>,
+    /// Tab was pressed since the last click, so keyboard focus is drawn.
+    keyboard: bool,
     /// Set once the close confirmation was accepted.
     closing: bool,
     tray: Option<Tray>,
@@ -274,6 +276,7 @@ impl SimplewallApp {
             notice: None,
             dialog: None,
             underline: None,
+            keyboard: false,
             closing: false,
             tray,
             tray_rx,
@@ -363,11 +366,13 @@ impl SimplewallApp {
         }
     }
 
+    /// A message in the status bar. Errors stay until clicked; others fade after a few seconds.
     fn notify(&mut self, text: impl Into<String>, error: bool) {
+        let shown = if error { Duration::from_secs(24 * 60 * 60) } else { Duration::from_secs(NOTICE_SECONDS) };
         self.notice = Some(Notice {
             text: text.into(),
             error,
-            until: Instant::now() + Duration::from_secs(NOTICE_SECONDS),
+            until: Instant::now() + shown,
         });
     }
 
@@ -387,7 +392,8 @@ impl SimplewallApp {
                         }
                         Err(err) => {
                             self.filters_on = wfp::filters_installed().unwrap_or(self.filters_on);
-                            self.notify(err, true);
+                            let what = if enabled { t("Enable filtering") } else { t("Disable filtering") };
+                            self.notify(format!("{what} failed: {err}. Select {what} to try again."), true);
                         }
                     }
                 }
@@ -1193,20 +1199,36 @@ impl SimplewallApp {
         }
     }
 
-    fn delete(&mut self, id: usize) {
+    /// Apps other than System, and user rules, can be deleted.
+    fn deletable(&self, id: usize) -> bool {
         if self.tab.app_kind().is_some() {
-            if id < self.profile.apps.len() && self.profile.apps[id].kind != AppKind::System {
-                self.profile.apps.remove(id);
-                self.clear_app_selection();
-                self.changed();
-            }
+            self.profile.apps.get(id).is_some_and(|a| a.kind != AppKind::System)
         } else if self.tab.rule_origin().is_some() {
-            if self.profile.rules.get(id).is_some_and(|r| r.origin == RuleOrigin::User) {
-                self.profile.rules.remove(id);
-                self.clear_rule_selection();
-                self.changed();
-            }
+            self.profile.rules.get(id).is_some_and(|r| r.origin == RuleOrigin::User)
+        } else {
+            false
         }
+    }
+
+    /// Delete asks first, as the C build does; there is no undo.
+    fn ask_delete(&mut self, id: usize) {
+        if self.deletable(id) {
+            self.dialog = Some(Dialog::Confirm(Ask::Delete(id)));
+        }
+    }
+
+    fn delete(&mut self, id: usize) {
+        if !self.deletable(id) {
+            return;
+        }
+        if self.tab.app_kind().is_some() {
+            self.profile.apps.remove(id);
+            self.clear_app_selection();
+        } else {
+            self.profile.rules.remove(id);
+            self.clear_rule_selection();
+        }
+        self.changed();
     }
 
     fn copy_text(&self, id: usize) -> Option<String> {
@@ -1341,7 +1363,7 @@ impl SimplewallApp {
                 Action::PurgeTimers => self.purge_timers(),
                 Action::ShowLog => self.show_log(),
                 Action::ClearLog => self.dialog = Some(Dialog::Confirm(Ask::ClearLog)),
-                Action::Delete => selected.into_iter().for_each(|id| self.delete(id)),
+                Action::Delete => selected.into_iter().for_each(|id| self.ask_delete(id)),
                 Action::Open => selected.into_iter().for_each(|id| self.open(id)),
                 Action::Toggle => selected.into_iter().for_each(|id| self.toggle(id)),
                 Action::Explore => selected.into_iter().for_each(|id| self.explore(id)),
@@ -1578,49 +1600,49 @@ impl SimplewallApp {
                         (&self.icons.shield_on, crate::i18n::t_as("Enable filters", "Enable filtering"))
                     };
                     let icon = icon.clone();
-                    if tool_button(ui, &icon, Some(label), "Enable or disable filtering", false, accent).clicked() {
+                    if tool_button(ui, &icon, Some(label), "Enable or disable filtering", None, accent).clicked() {
                         self.dialog = Some(Dialog::Confirm(Ask::Filters(!self.filters_on)));
                     }
                     tool_separator(ui);
                     let plus = self.icons.plus.clone();
-                    if tool_button(ui, &plus, None, t("Create rule"), false, accent).clicked() {
+                    if tool_button(ui, &plus, None, t("Create rule"), None, accent).clicked() {
                         let apps = self.selected_app_path().into_iter().collect();
                         self.dialog = Some(Dialog::Rule(RuleDraft::new(apps)));
                     }
                     tool_separator(ui);
                     let alert = self.icons.error.clone();
                     let notifications = self.profile.settings.notifications;
-                    if tool_button(ui, &alert, None, t("Enable packets notifications"), notifications, accent).clicked() {
+                    if tool_button(ui, &alert, None, t("Enable packets notifications"), Some(notifications), accent).clicked() {
                         self.profile.settings.notifications = !notifications;
                         self.save();
                     }
                     let note = self.icons.note.clone();
                     let log_file = self.profile.settings.log_to_file;
-                    if tool_button(ui, &note, None, "Log to file", log_file, accent).clicked() {
+                    if tool_button(ui, &note, None, "Log to file", Some(log_file), accent).clicked() {
                         self.profile.settings.log_to_file = !log_file;
                         self.save();
                     }
                     let eye = self.icons.eye.clone();
                     let log_ui = self.profile.settings.log_ui;
-                    if tool_button(ui, &eye, None, "Log to UI (Packets log)", log_ui, accent).clicked() {
+                    if tool_button(ui, &eye, None, "Log to UI (Packets log)", Some(log_ui), accent).clicked() {
                         self.set_log_ui(!log_ui);
                     }
                     tool_separator(ui);
                     let refresh = self.icons.refresh.clone();
-                    if tool_button(ui, &refresh, None, "Refresh (F5)", false, accent).clicked() {
+                    if tool_button(ui, &refresh, None, "Refresh (F5)", None, accent).clicked() {
                         self.refresh();
                     }
                     let settings = self.icons.settings.clone();
-                    if tool_button(ui, &settings, None, "Settings (F2)", false, accent).clicked() {
+                    if tool_button(ui, &settings, None, "Settings (F2)", None, accent).clicked() {
                         self.dialog = Some(Dialog::Settings);
                     }
                     tool_separator(ui);
                     let show = self.icons.log_show.clone();
-                    if tool_button(ui, &show, None, "Show log (Ctrl+I)", false, accent).clicked() {
+                    if tool_button(ui, &show, None, "Show log (Ctrl+I)", None, accent).clicked() {
                         self.show_log();
                     }
                     let clear = self.icons.log_clear.clone();
-                    if tool_button(ui, &clear, None, "Clear log (Ctrl+X)", false, accent).clicked() {
+                    if tool_button(ui, &clear, None, "Clear log (Ctrl+X)", None, accent).clicked() {
                         self.dialog = Some(Dialog::Confirm(Ask::ClearLog));
                     }
 
@@ -1651,10 +1673,14 @@ impl SimplewallApp {
     }
 
     fn search_box(&mut self, ui: &mut Ui) {
+        // It takes what the toolbar leaves, so it is never cut off at the window edge.
+        let width = (ui.available_width() - SEARCH_ICON_GUTTER - 18.0).clamp(60.0, 260.0);
+        let find = crate::i18n::t_as("Search", "Find");
+        let hint = if width < 170.0 { format!("{find}\u{2026}") } else { format!("{find}\u{2026} (Ctrl+F)") };
         let edit = egui::TextEdit::singleline(&mut self.query)
             .id(Id::new(FIND_ID))
-            .hint_text(format!("{}... (Ctrl+F)", crate::i18n::t_as("Search", "Find")))
-            .desired_width(260.0)
+            .hint_text(hint)
+            .desired_width(width)
             .margin(Margin { left: 10, right: SEARCH_ICON_GUTTER as i8, top: 6, bottom: 6 });
         let response = ui.add(edit);
         // The response rect excludes the margins; the frame does not.
@@ -1671,14 +1697,15 @@ impl SimplewallApp {
             // The C build's clear button.
             let rect = Rect::from_center_size(center, vec2(20.0, 20.0));
             let clear = ui.interact(rect, Id::new("find_clear"), Sense::click());
-            let hover = ui.ctx().animate_bool_with_time(clear.id, clear.hovered(), HOVER_FADE);
+            clear.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Clear search"));
+            let hover = ui.ctx().animate_bool_with_time(clear.id, clear.hovered(), theme::motion(HOVER_FADE));
             if hover > 0.0 {
                 ui.painter().rect_filled(rect, 4.0, theme::overlay(hover));
             }
             let icon = Rect::from_center_size(center, vec2(14.0, 14.0));
             let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
             ui.painter().image(self.icons.search.id(), icon, uv, Color32::WHITE);
-            if clear.on_hover_text("Clear").clicked() {
+            if clear.on_hover_text("Clear search").clicked() {
                 self.query.clear();
                 self.dirty = true;
             }
@@ -1705,7 +1732,7 @@ impl SimplewallApp {
                         let galleys: Vec<_> = Tab::ALL
                             .iter()
                             .map(|tab| {
-                                let font = theme::body(13.0);
+                                let font = theme::body(theme::BODY);
                                 ui.painter().layout_no_wrap(tab.label().into(), font, theme::text())
                             })
                             .collect();
@@ -1718,7 +1745,9 @@ impl SimplewallApp {
                             let selected = tab == self.tab;
                             let (rect, response) =
                                 ui.allocate_exact_size(vec2(galley.size().x + padding, 34.0), Sense::click());
-                            let hover = ui.ctx().animate_bool_with_time(response.id, response.hovered(), HOVER_FADE);
+                            let name = tab.label();
+                            response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, name));
+                            let hover = ui.ctx().animate_bool_with_time(response.id, response.hovered(), theme::motion(HOVER_FADE));
                             if hover > 0.0 && !selected {
                                 let fill = theme::overlay(0.65 * hover);
                                 ui.painter().rect_filled(rect.shrink2(vec2(0.0, 4.0)), 4.0, fill);
@@ -1750,7 +1779,7 @@ impl SimplewallApp {
                 if let Some(target) = active {
                     let drawn = self.slide_underline(ui.ctx(), target);
                     let rect = Rect::from_x_y_ranges(drawn, bar.bottom() - 3.0..=bar.bottom());
-                    ui.painter().rect_filled(rect, CornerRadius::same(2), self.accent);
+                    ui.painter().rect_filled(rect, CornerRadius::same(2), theme::accent_ink(self.accent));
                 }
                 if let Some(tab) = clicked {
                     self.switch_tab(tab);
@@ -1762,13 +1791,14 @@ impl SimplewallApp {
     fn slide_underline(&mut self, ctx: &egui::Context, target: Rangef) -> Rangef {
         let now = ctx.input(|i| i.time);
         let tab = self.tab;
-        let line = self.underline.get_or_insert(Underline { tab, drawn: target, from: target, start: now - TAB_SLIDE });
+        let slide = theme::motion(TAB_SLIDE as f32) as f64;
+        let line = self.underline.get_or_insert(Underline { tab, drawn: target, from: target, start: now - slide });
         if line.tab != tab {
             line.tab = tab;
             line.from = line.drawn;
             line.start = now;
         }
-        let t = ((now - line.start) / TAB_SLIDE).clamp(0.0, 1.0) as f32;
+        let t = if slide > 0.0 { ((now - line.start) / slide).clamp(0.0, 1.0) as f32 } else { 1.0 };
         let e = easing::cubic_out(t);
         let drawn = Rangef::new(
             line.from.min + (target.min - line.from.min) * e,
@@ -1779,6 +1809,36 @@ impl SimplewallApp {
             ctx.request_repaint();
         }
         drawn
+    }
+
+    /// The focused control gets a 2 px ring in the text color, which reads on
+    /// every surface, while the keyboard is in use (a click hides it again).
+    fn focus_ring(&mut self, ctx: &egui::Context) {
+        ctx.input(|i| {
+            for event in &i.events {
+                match event {
+                    Event::Key { key: Key::Tab, pressed: true, .. } => self.keyboard = true,
+                    Event::PointerButton { pressed: true, .. } => self.keyboard = false,
+                    _ => {}
+                }
+            }
+        });
+        if !self.keyboard {
+            return;
+        }
+        let Some(focused) = ctx.read_response(match ctx.memory(|m| m.focused()) {
+            Some(id) => id,
+            None => return,
+        }) else {
+            return;
+        };
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, Id::new("focus_ring")));
+        painter.rect_stroke(
+            focused.rect.expand(2.0),
+            CornerRadius::same(5),
+            Stroke::new(2.0_f32, theme::text()),
+            egui::StrokeKind::Outside,
+        );
     }
 
     fn status_bar(&mut self, ctx: &egui::Context) {
@@ -1799,8 +1859,23 @@ impl SimplewallApp {
                 let painter = ui.painter();
                 let y = full.center().y;
                 painter.circle_filled(pos2(full.left() + 4.0, y), 3.5, dot);
-                let galley = painter.layout_no_wrap(text, theme::body(12.5), color);
+                // The message stops before the counters; the whole text is in its tooltip.
+                let room = Rect::from_min_max(pos2(full.left(), full.top()), pos2(full.left() + first - 10.0, full.bottom()));
+                let mut job = egui::text::LayoutJob::simple_singleline(text.clone(), theme::body(theme::SMALL), color);
+                job.wrap = egui::text::TextWrapping::truncate_at_width(room.width() - 16.0);
+                let galley = painter.layout_job(job);
+                let cut = galley.elided;
                 painter.galley(pos2(full.left() + 16.0, y - galley.size().y / 2.0), galley, color);
+                let error = self.notice.as_ref().is_some_and(|n| n.error);
+                let message = ui.interact(room, Id::new("status_message"), if error { Sense::click() } else { Sense::hover() });
+                let message = match (cut, error) {
+                    (_, true) => message.on_hover_text(format!("{text}\n\nClick to dismiss.")),
+                    (true, false) => message.on_hover_text(&text),
+                    (false, false) => message,
+                };
+                if message.clicked() {
+                    self.notice = None;
+                }
                 let parts = [
                     format!("{}: {}", t("Unused apps"), self.unused),
                     format!("{}: {}", t("Apps with timer"), self.timers),
@@ -1808,7 +1883,7 @@ impl SimplewallApp {
                 for (i, label) in parts.into_iter().enumerate() {
                     let x = full.left() + first + part * i as f32;
                     painter.vline(x, full.top() + 6.0..=full.bottom() - 6.0, Stroke::new(1.0_f32, theme::border()));
-                    let galley = painter.layout_no_wrap(label, theme::body(12.5), theme::text_muted());
+                    let galley = painter.layout_no_wrap(label, theme::body(theme::SMALL), theme::text_muted());
                     painter.galley(pos2(x + 10.0, y - galley.size().y / 2.0), galley, theme::text_muted());
                 }
             });
@@ -1923,11 +1998,23 @@ impl SimplewallApp {
         if !self.query.trim().is_empty() {
             return format!("Nothing matches \u{201C}{}\u{201D}.", self.query.trim());
         }
+        // Each says what fills the tab, and what to do when that cannot happen yet.
         match self.tab {
-            Tab::Packets => "No dropped packets yet.".into(),
+            Tab::Packets if !self.profile.settings.log_ui => {
+                "Blocked connections are listed here when Log to UI is on (the eye in the toolbar).".into()
+            }
+            Tab::Packets if !self.filters_on => {
+                "Blocked connections appear here while filtering is on. Select Enable filtering to start.".into()
+            }
+            Tab::Packets => "No blocked connections yet.".into(),
+            Tab::Connections if !self.profile.settings.network_monitor => {
+                "The connection monitor is off. Turn it on in Settings > Connections.".into()
+            }
             Tab::Connections => "No active connections.".into(),
             Tab::User => "No user rules. Use + in the toolbar to create one.".into(),
-            _ => "Nothing here.".into(),
+            Tab::Apps => "No apps yet. Apps appear here when they first connect, or use File > Add app.".into(),
+            Tab::Services | Tab::Uwp => "None found on this computer.".into(),
+            _ => "No rules in this group.".into(),
         }
     }
 
@@ -1992,7 +2079,7 @@ impl SimplewallApp {
             }
             if app.kind != AppKind::System && ui.add(egui::Button::new(t("Delete")).shortcut_text("Del")).clicked() {
                 ui.close_menu();
-                self.delete(id);
+                self.ask_delete(id);
             }
         } else if self.tab.rule_origin().is_some() {
             let Some(rule) = self.profile.rules.get(id).cloned() else {
@@ -2017,7 +2104,7 @@ impl SimplewallApp {
             }
             if rule.origin == RuleOrigin::User && ui.add(egui::Button::new(t("Delete")).shortcut_text("Del")).clicked() {
                 ui.close_menu();
-                self.delete(id);
+                self.ask_delete(id);
             }
         } else if ui.add(egui::Button::new(t("Copy")).shortcut_text("Ctrl+C")).clicked() {
             ui.close_menu();
@@ -2101,6 +2188,7 @@ impl SimplewallApp {
                     Ask::Filters(enable) => self.set_filters(enable, temporary),
                     Ask::PurgeUnused(_) => self.purge_unused(),
                     Ask::ClearLog => self.clear_log(),
+                    Ask::Delete(id) => self.delete(id),
                     Ask::CloseWithTimers(_) => self.end_timers_and_close(ctx),
                     Ask::Exit => {
                         if temporary {
@@ -2174,6 +2262,7 @@ impl eframe::App for SimplewallApp {
         self.list(ctx);
         self.dialogs(ctx);
         self.alerts_ui(ctx);
+        self.focus_ring(ctx);
         if self.dirty {
             ctx.request_repaint();
         }
@@ -2181,12 +2270,19 @@ impl eframe::App for SimplewallApp {
 }
 
 /// Toolbar button: 20px icon, optional label, hover fade, 0.96 press scale.
-fn tool_button(ui: &mut Ui, icon: &TextureHandle, label: Option<&str>, tip: &str, checked: bool, accent: Color32) -> Response {
-    let font = theme::body(13.0);
+/// `checked` is Some for an on/off button.
+fn tool_button(ui: &mut Ui, icon: &TextureHandle, label: Option<&str>, tip: &str, checked: Option<bool>, accent: Color32) -> Response {
+    let font = theme::body(theme::BODY);
     let galley = label.map(|l| ui.painter().layout_no_wrap(l.into(), font, theme::text()));
     let width = 10.0 + 20.0 + galley.as_ref().map_or(0.0, |g| 8.0 + g.size().x) + 10.0;
     let (rect, response) = ui.allocate_exact_size(vec2(width, 34.0), Sense::click());
-    let hover = ui.ctx().animate_bool_with_time(response.id, response.hovered(), HOVER_FADE);
+    let name = label.unwrap_or(tip);
+    response.widget_info(|| match checked {
+        Some(on) => egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, name),
+        None => egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name),
+    });
+    let checked = checked.unwrap_or(false);
+    let hover = ui.ctx().animate_bool_with_time(response.id, response.hovered(), theme::motion(HOVER_FADE));
     let scale = if response.is_pointer_button_down_on() { 0.96 } else { 1.0 };
     let body = Rect::from_center_size(rect.center(), rect.size() * scale);
     let painter = ui.painter();

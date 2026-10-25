@@ -106,20 +106,12 @@ pub fn show(ctx: &egui::Context, alert: &Alert, files: &mut FileIcons) -> Action
                     }
                 }
                 ui.vertical(|ui| {
-                    ui.label(RichText::new(&alert.app.display_name).font(theme::semibold(15.0)));
+                    ui.label(RichText::new(&alert.app.display_name).font(theme::semibold(theme::TITLE)));
                     let what = format!("Blocked {} connection", p.direction().to_lowercase());
                     ui.label(RichText::new(what).small().color(theme::text_muted()));
                 });
                 ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                    let (rect, close) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-                    if close.hovered() {
-                        ui.painter().rect_filled(rect, 4.0, theme::overlay(1.1));
-                    }
-                    let c = rect.center();
-                    let stroke = Stroke::new(1.5_f32, if close.hovered() { theme::text() } else { theme::text_muted() });
-                    ui.painter().line_segment([c + vec2(-4.5, -4.5), c + vec2(4.5, 4.5)], stroke);
-                    ui.painter().line_segment([c + vec2(-4.5, 4.5), c + vec2(4.5, -4.5)], stroke);
-                    if close.on_hover_text(t("Close")).clicked() {
+                    if super::dialogs::close_button(ui).clicked() {
                         action = Action::Dismiss;
                     }
                     if alert.count > 1 {

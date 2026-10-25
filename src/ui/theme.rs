@@ -147,6 +147,14 @@ pub fn text_on(fill: Color32) -> Color32 {
     }
 }
 
+/// The type scale, in points before the View > Font scale. Every text size in
+/// the window is one of these.
+pub const CAPTION: f32 = 11.0;
+pub const SMALL: f32 = 12.5;
+pub const BODY: f32 = 13.0;
+pub const TITLE: f32 = 16.0;
+pub const DISPLAY: f32 = 18.0;
+
 /// Text scale from View > Font, as f32 bits (1.0 by default).
 static TEXT_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3F80_0000);
 
@@ -171,11 +179,11 @@ pub fn set_text_size(ctx: &egui::Context, points: u64) {
     TEXT_SCALE.store(scale.to_bits(), Ordering::Relaxed);
     ctx.style_mut(|style| {
         style.text_styles = [
-            (TextStyle::Small, FontId::proportional(11.0 * scale)),
-            (TextStyle::Body, FontId::proportional(13.0 * scale)),
-            (TextStyle::Button, FontId::proportional(13.0 * scale)),
-            (TextStyle::Heading, semibold(17.0)),
-            (TextStyle::Monospace, FontId::monospace(12.5 * scale)),
+            (TextStyle::Small, FontId::proportional(CAPTION * scale)),
+            (TextStyle::Body, FontId::proportional(BODY * scale)),
+            (TextStyle::Button, FontId::proportional(BODY * scale)),
+            (TextStyle::Heading, semibold(TITLE)),
+            (TextStyle::Monospace, FontId::monospace(SMALL * scale)),
         ]
         .into();
     });
@@ -183,6 +191,7 @@ pub fn set_text_size(ctx: &egui::Context, points: u64) {
 
 /// Fonts are loaded once; `set_theme` can run again when the theme changes.
 pub fn apply(ctx: &egui::Context, accent: Color32, dark: bool, follow_system: bool, language: &str, face: &str, size: u64) {
+    MOTION.store(super::shell::animations_enabled(), Ordering::Relaxed);
     install_fonts(ctx, language, face);
     set_text_size(ctx, size);
     set_theme(ctx, accent, dark, follow_system);
@@ -194,9 +203,60 @@ pub fn apply(ctx: &egui::Context, accent: Color32, dark: bool, follow_system: bo
         style.spacing.window_margin = egui::Margin::same(16);
         style.spacing.scroll.floating = true;
         style.spacing.scroll.bar_width = 8.0;
+        // A thin handle stays visible at rest, so content past the edge has a cue.
+        style.spacing.scroll.dormant_handle_opacity = 0.5;
         style.interaction.selectable_labels = false;
         style.interaction.tooltip_delay = 0.4;
+        style.animation_time = motion(style.animation_time);
     });
+}
+
+/// Windows' "Animation effects" (Settings > Accessibility > Visual effects).
+static MOTION: AtomicBool = AtomicBool::new(true);
+
+/// An animation length, or zero when Windows has animations turned off.
+pub fn motion(seconds: f32) -> f32 {
+    if MOTION.load(Ordering::Relaxed) {
+        seconds
+    } else {
+        0.0
+    }
+}
+
+/// The accent where it is drawn as a line or text on the window's surfaces.
+/// A light accent such as Windows' amber is darkened on light surfaces until it
+/// reaches 4.5:1, so links, the tab underline, and selection stay visible.
+pub fn accent_ink(accent: Color32) -> Color32 {
+    if is_dark() {
+        return accent;
+    }
+    let background = LIGHT.surface;
+    (0..=20)
+        .map(|step| lerp(accent, Color32::BLACK, step as f32 / 20.0))
+        .find(|c| contrast(*c, background) >= 4.5)
+        .unwrap_or(LIGHT.text)
+}
+
+fn lerp(a: Color32, b: Color32, t: f32) -> Color32 {
+    let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgb(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()))
+}
+
+/// WCAG contrast ratio of two opaque colors.
+pub fn contrast(a: Color32, b: Color32) -> f32 {
+    let luminance = |c: Color32| {
+        let channel = |v: u8| {
+            let s = v as f32 / 255.0;
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
+    };
+    let (x, y) = (luminance(a), luminance(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
 }
 
 /// `follow_system` leaves the title bar to Windows; otherwise it matches `dark`.
@@ -209,8 +269,9 @@ pub fn set_theme(ctx: &egui::Context, accent: Color32, dark: bool, follow_system
     visuals.extreme_bg_color = p.surface;
     visuals.faint_bg_color = p.faces[0];
     visuals.code_bg_color = p.surface;
-    visuals.hyperlink_color = accent;
-    visuals.selection.bg_fill = accent.gamma_multiply(0.45);
+    visuals.hyperlink_color = accent_ink(accent);
+    // 0.32 keeps body text on a selected item at 4.5:1 or better.
+    visuals.selection.bg_fill = accent.gamma_multiply(0.32);
     visuals.selection.stroke = Stroke::new(1.0_f32, p.text);
     visuals.window_stroke = Stroke::new(1.0_f32, p.border);
     visuals.window_corner_radius = CornerRadius::same(8);
@@ -224,7 +285,7 @@ pub fn set_theme(ctx: &egui::Context, accent: Color32, dark: bool, follow_system
     visuals.window_shadow = shadow;
     visuals.popup_shadow = shadow;
     visuals.indent_has_left_vline = false;
-    visuals.text_cursor.stroke = Stroke::new(1.5_f32, accent);
+    visuals.text_cursor.stroke = Stroke::new(1.5_f32, accent_ink(accent));
 
     let strong = if dark { Color32::WHITE } else { Color32::BLACK };
     let widgets = &mut visuals.widgets;

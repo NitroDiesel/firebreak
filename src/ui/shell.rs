@@ -233,6 +233,23 @@ pub fn work_area() -> Option<windows::Win32::Foundation::RECT> {
     Some(rect)
 }
 
+/// Windows' "Animation effects" setting (SPI_GETCLIENTAREAANIMATION). True when unknown.
+pub fn animations_enabled() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    };
+    let mut on = 1i32;
+    unsafe {
+        let _ = SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            Some(&mut on as *mut _ as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        );
+    }
+    on != 0
+}
+
 /// A full-screen game, video, or presentation is in front (`_r_wnd_isfullscreenmode`).
 pub fn fullscreen_app_in_front() -> bool {
     use windows::Win32::UI::Shell::{

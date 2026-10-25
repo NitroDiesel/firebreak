@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use eframe::egui::{
     self, pos2, text::LayoutJob, text::TextWrapping, vec2, Align2, Color32, FontId, Galley, Id, Painter, Pos2, Rect,
-    Response, Sense, Shape, Stroke, StrokeKind, TextureHandle, TextureId, Ui,
+    Response, Sense, Shape, Stroke, StrokeKind, TextureHandle, TextureId, Ui, WidgetInfo, WidgetType,
 };
 
 use super::shell;
@@ -184,7 +184,7 @@ impl List<'_> {
                 body.center_top() + vec2(0.0, 40.0),
                 Align2::CENTER_CENTER,
                 self.empty,
-                theme::body(13.0),
+                theme::body(theme::BODY),
                 theme::text_muted(),
             );
             return out;
@@ -300,6 +300,7 @@ impl List<'_> {
 
     fn group(&self, ui: &mut Ui, rect: Rect, id: u8, title: &str, collapsed: bool, out: &mut Output) {
         let response = ui.interact(rect, self.id.with(("group", id)), Sense::click());
+        response.widget_info(|| WidgetInfo::selected(WidgetType::CollapsingHeader, true, !collapsed, title));
         paint_group(ui.painter(), rect, title, collapsed, response.hovered());
         if response.clicked() {
             out.group = Some(id);
@@ -315,16 +316,26 @@ impl List<'_> {
         for (index, (column, width)) in self.columns.iter().zip(widths).enumerate() {
             let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(*width, rect.height()));
             x += width;
+            let title = crate::i18n::t(column.title);
+            let sorted = self.sort.column == index;
+            let order = match (sorted, self.sort.descending) {
+                (false, _) => "",
+                (true, false) => ", sorted ascending",
+                (true, true) => ", sorted descending",
+            };
             let response = ui.interact(cell, self.id.with(("head", index)), Sense::click());
+            response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, format!("{title}{order}")));
             if response.hovered() {
                 painter.rect_filled(cell, 0.0, theme::hover());
             }
             if response.clicked() {
                 out.sort = Some(index);
             }
-            let sorted = self.sort.column == index;
             let color = if sorted { theme::text() } else { theme::text_muted() };
-            let galley = single_line(painter, crate::i18n::t(column.title), theme::semibold(12.0), color, width - PAD * 2.0 - ARROW_ROOM);
+            let galley = single_line(painter, title, theme::semibold(theme::SMALL), color, width - PAD * 2.0 - ARROW_ROOM);
+            if galley.elided {
+                response.on_hover_text(title);
+            }
             let text_x = if column.right {
                 cell.right() - PAD - galley.size().x
             } else {
@@ -370,7 +381,7 @@ impl List<'_> {
             painter.rect_filled(rect, radius, fill);
             if selected {
                 painter.rect_filled(rect, radius, Color32::from_black_alpha(36));
-                painter.rect_stroke(rect.shrink(0.5), radius, Stroke::new(1.5_f32, accent), StrokeKind::Inside);
+                painter.rect_stroke(rect, radius, Stroke::new(2.0_f32, theme::TEXT_ON_FILL), StrokeKind::Inside);
             } else if hovered {
                 painter.rect_filled(rect, radius, Color32::from_black_alpha(18));
             }
@@ -378,8 +389,11 @@ impl List<'_> {
         } else {
             if selected {
                 painter.rect_filled(rect, radius, accent.gamma_multiply(0.30));
+                let ink = theme::accent_ink(accent);
                 if radius == 0.0 {
-                    painter.rect_filled(Rect::from_min_size(rect.min, vec2(2.0, rect.height())), 0.0, accent);
+                    painter.rect_filled(Rect::from_min_size(rect.min, vec2(2.0, rect.height())), 0.0, ink);
+                } else {
+                    painter.rect_stroke(rect, radius, Stroke::new(1.5_f32, ink), StrokeKind::Inside);
                 }
             } else if hovered {
                 painter.rect_filled(rect, radius, theme::hover());
@@ -388,7 +402,21 @@ impl List<'_> {
         }
     }
 
-    fn respond(&self, response: Response, check: Option<Response>, row: &Row, out: &mut Output) {
+    /// `cut` holds "Column: value" for cells drawn truncated; they join the hint.
+    fn respond(&self, response: Response, check: Option<Response>, row: &Row, cut: &[String], out: &mut Output) {
+        let name = row.cells.first().cloned().unwrap_or_default();
+        let selected = self.selected == Some(row.id);
+        response.widget_info(|| {
+            let mut label = row.cells.iter().filter(|c| !c.is_empty()).cloned().collect::<Vec<_>>().join(", ");
+            if let Some(hint) = &row.hint {
+                label.push_str(". ");
+                label.push_str(&hint.replace('\n', ". "));
+            }
+            WidgetInfo::selected(WidgetType::SelectableLabel, true, selected, label)
+        });
+        if let (Some(check), Some(checked)) = (&check, row.check) {
+            check.widget_info(|| WidgetInfo::selected(WidgetType::Checkbox, true, checked, &name));
+        }
         if let Some(check) = check {
             if check.clicked() {
                 out.toggled = Some(row.id);
@@ -400,7 +428,13 @@ impl List<'_> {
         if response.double_clicked() {
             out.activated = Some(row.id);
         }
-        let response = match &row.hint {
+        let hint = match (&row.hint, cut.is_empty()) {
+            (Some(hint), true) => Some(hint.clone()),
+            (Some(hint), false) => Some(format!("{hint}\n{}", cut.join("\n"))),
+            (None, false) => Some(cut.join("\n")),
+            (None, true) => None,
+        };
+        let response = match hint {
             Some(hint) => response.on_hover_text_at_pointer(hint),
             None => response,
         };
@@ -409,11 +443,11 @@ impl List<'_> {
 
     #[allow(clippy::too_many_arguments)]
     fn row(&self, ui: &mut Ui, rect: Rect, row: &Row, widths: &[f32], art: &mut Art, budget: &mut u32, out: &mut Output) {
-        let response = ui.interact(rect, self.id.with(("row", row.id)), Sense::click());
+        let response = ui.interact(rect, self.id.with(("row", row.id)), Sense::CLICK);
         let check_rect = Rect::from_center_size(pos2(rect.left() + PAD + CHECK / 2.0, rect.center().y), vec2(CHECK, CHECK));
         let check = row
             .check
-            .map(|_| ui.interact(check_rect.expand(4.0), self.id.with(("check", row.id)), Sense::click()));
+            .map(|_| ui.interact(check_rect.expand(4.0), self.id.with(("check", row.id)), Sense::CLICK));
         let hovered = response.hovered() || check.as_ref().is_some_and(|r| r.hovered());
         let texture = self.texture(ui, row, art, budget, out);
         let painter = ui.painter();
@@ -435,6 +469,7 @@ impl List<'_> {
         }
 
         let mut cell_left = rect.left();
+        let mut cut = Vec::new();
         for (index, (cell, width)) in row.cells.iter().zip(widths).enumerate() {
             let column = &self.columns[index];
             let start = if index == 0 { x } else { cell_left + PAD };
@@ -444,20 +479,23 @@ impl List<'_> {
                 continue;
             }
             let color = if index == 0 { text_color } else if on_fill { theme::TEXT_ON_FILL } else { theme::text_muted() };
-            let galley = single_line(painter, cell, theme::body(13.0), color, end - start);
+            let galley = single_line(painter, cell, theme::body(theme::BODY), color, end - start);
+            if galley.elided && index > 0 {
+                cut.push(format!("{}: {cell}", crate::i18n::t(column.title)));
+            }
             let gx = if column.right { end - galley.size().x } else { start };
             painter.galley(Pos2::new(gx, rect.center().y - galley.size().y / 2.0), galley, color);
         }
-        self.respond(response, check, row, out);
+        self.respond(response, check, row, &cut, out);
     }
 
     /// One item in the Icon or Tile view.
     fn tile(&self, ui: &mut Ui, rect: Rect, row: &Row, art: &mut Art, budget: &mut u32, out: &mut Output) {
-        let response = ui.interact(rect, self.id.with(("row", row.id)), Sense::click());
+        let response = ui.interact(rect, self.id.with(("row", row.id)), Sense::CLICK);
         let check_rect = Rect::from_min_size(rect.min + vec2(6.0, 6.0), vec2(CHECK, CHECK));
         let check = row
             .check
-            .map(|_| ui.interact(check_rect.expand(4.0), self.id.with(("check", row.id)), Sense::click()));
+            .map(|_| ui.interact(check_rect.expand(4.0), self.id.with(("check", row.id)), Sense::CLICK));
         let hovered = response.hovered() || check.as_ref().is_some_and(|r| r.hovered());
         let texture = self.texture(ui, row, art, budget, out);
         let painter = ui.painter();
@@ -473,7 +511,7 @@ impl List<'_> {
                     let icon_rect = Rect::from_center_size(pos2(rect.center().x, rect.top() + 8.0 + icon / 2.0), vec2(icon, icon));
                     painter.image(texture, icon_rect, full_uv(), Color32::WHITE);
                 }
-                let galley = single_line(painter, name, theme::body(12.5), text_color, rect.width() - 8.0);
+                let galley = single_line(painter, name, theme::body(theme::SMALL), text_color, rect.width() - 8.0);
                 let pos = pos2(rect.center().x - galley.size().x / 2.0, rect.bottom() - 8.0 - galley.size().y);
                 painter.galley(pos, galley, text_color);
             }
@@ -485,8 +523,8 @@ impl List<'_> {
                     x += icon + 8.0;
                 }
                 let width = rect.right() - 8.0 - x;
-                let title = single_line(painter, name, theme::semibold(13.0), text_color, width);
-                let sub = single_line(painter, &detail, theme::body(11.5), muted, width);
+                let title = single_line(painter, name, theme::semibold(theme::BODY), text_color, width);
+                let sub = single_line(painter, &detail, theme::body(theme::CAPTION), muted, width);
                 let block = title.size().y + 2.0 + sub.size().y;
                 let y = rect.center().y - block / 2.0;
                 let title_height = title.size().y;
@@ -502,7 +540,7 @@ impl List<'_> {
             };
             paint_check(painter, check_rect, checked, art.accent, on_fill);
         }
-        self.respond(response, check, row, out);
+        self.respond(response, check, row, &[], out);
     }
 }
 
@@ -544,8 +582,9 @@ fn column_widths(columns: &[Column], full: f32, auto: Option<&[f32]>) -> Vec<f32
         let ratio = (budget - kept) / (fixed - kept);
         base.iter().map(|w| w.min(KEEP) + (w - w.min(KEEP)) * ratio).collect()
     } else {
-        let scale = (budget / fixed).clamp(0.4, 1.0);
-        base.iter().map(|w| w * scale).collect()
+        // Even the kept widths do not fit: shrink those, not the full widths.
+        let scale = (budget / kept).clamp(0.4, 1.0);
+        base.iter().map(|w| w.min(KEEP) * scale).collect()
     };
     let fill = (full - widths.iter().sum::<f32>()).max(MIN_FILL);
     base.iter().zip(widths).map(|(b, w)| if *b == 0.0 { fill } else { w }).collect()
@@ -562,11 +601,11 @@ pub fn measure_columns(ctx: &egui::Context, columns: &[Column], lines: &[Line]) 
                 if column.width == 0.0 {
                     return 0.0;
                 }
-                let mut widest = width(crate::i18n::t(column.title), theme::semibold(12.0)) + ARROW_ROOM;
+                let mut widest = width(crate::i18n::t(column.title), theme::semibold(theme::SMALL)) + ARROW_ROOM;
                 for line in lines {
                     if let Line::Row(row) = line {
                         if let Some(cell) = row.cells.get(i) {
-                            widest = widest.max(width(cell, theme::body(13.0)));
+                            widest = widest.max(width(cell, theme::body(theme::BODY)));
                         }
                     }
                 }
@@ -664,7 +703,7 @@ fn paint_group(painter: &Painter, rect: Rect, title: &str, collapsed: bool, hove
         vec![c + vec2(-4.0, -2.0), c + vec2(4.0, -2.0), c + vec2(0.0, 2.5)]
     };
     painter.add(Shape::convex_polygon(points, theme::text_muted(), Stroke::NONE));
-    let galley = single_line(painter, title, theme::semibold(12.5), theme::text(), rect.width() - 60.0);
+    let galley = single_line(painter, title, theme::semibold(theme::SMALL), theme::text(), rect.width() - 60.0);
     let text_pos = pos2(rect.left() + PAD + 16.0, rect.center().y - galley.size().y / 2.0);
     let line_x = text_pos.x + galley.size().x + 10.0;
     painter.galley(text_pos, galley, theme::text());
