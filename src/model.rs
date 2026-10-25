@@ -348,6 +348,8 @@ settings! {
     last_update_check: u64 = 0,
     /// IsEnableAppMonitor: add programs to the list as they start.
     app_monitor: bool = false,
+    /// ProfileType: 0 plain XML, 1 compressed, 2 encrypted.
+    profile_type: u64 = 0,
     /// IsStartMinimized: start in the tray.
     start_minimized: bool = false,
     /// ConfirmExit2: ask before exiting while filters are on.

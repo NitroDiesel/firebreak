@@ -1394,12 +1394,22 @@ impl SimplewallApp {
                             .checkbox(&mut s.user_allows_override_blocklist, "User rules take priority over blocklist")
                             .changed();
                         ui.separator();
+                        let mut format_changed = false;
+                        ui.menu_button(t("Profile type"), |ui| {
+                            for (value, label) in [(0, t("Plain")), (1, t("Compressed")), (2, t("Encrypted"))] {
+                                format_changed |= ui.radio_value(&mut s.profile_type, value, label).changed();
+                            }
+                        });
+                        ui.separator();
                         if ui.button("All settings\u{2026}").clicked() {
                             ui.close_menu();
                             self.dialog = Some(Dialog::Settings);
                         }
                         if changed {
                             self.changed();
+                        } else if format_changed {
+                            // Rewrite the profile in the new format right away.
+                            self.save();
                         }
                     });
                     ui.menu_button(t("Blocklist"), |ui| {

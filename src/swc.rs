@@ -177,80 +177,128 @@ mod tests {
     }
 }
 
+/// How the C build can save a profile (ProfileType).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Format {
+    Plain,
+    Compressed,
+    Encrypted,
+}
+
+impl Format {
+    pub fn from_setting(value: u64) -> Self {
+        match value {
+            1 => Self::Compressed,
+            2 => Self::Encrypted,
+            _ => Self::Plain,
+        }
+    }
+}
+
+/// XML to profile bytes, as `_app_db_encodebody` writes them. Plain stays bare
+/// XML; the other formats get the SWC header with the SHA-256 of the XML.
+pub fn encode(text: &str, format: Format) -> Result<Vec<u8>, String> {
+    let plain = text.as_bytes();
+    let (kind, body) = match format {
+        Format::Plain => return Ok(plain.to_vec()),
+        Format::Compressed => (COMPRESSED, compress(plain)?),
+        Format::Encrypted => (ENCRYPTED, encrypt(plain)?),
+    };
+    let mut file = FOURCC.to_vec();
+    file.push(kind);
+    file.extend(sha256(plain)?);
+    file.extend(body);
+    Ok(file)
+}
+
+#[link(name = "ntdll", kind = "raw-dylib")]
+extern "system" {
+    fn RtlGetCompressionWorkSpaceSize(format: u16, buffer_ws: *mut u32, fragment_ws: *mut u32) -> i32;
+    fn RtlCompressBuffer(
+        format: u16,
+        uncompressed: *const u8,
+        uncompressed_size: u32,
+        compressed: *mut u8,
+        compressed_size: u32,
+        chunk_size: u32,
+        final_size: *mut u32,
+        workspace: *mut u8,
+    ) -> i32;
+}
+
+/// LZNT1 at maximum compression (COMPRESSION_ENGINE_MAXIMUM), as the C build saves.
+fn compress(data: &[u8]) -> Result<Vec<u8>, String> {
+    const ENGINE_MAXIMUM: u16 = 0x0100;
+    let format = COMPRESSION_FORMAT_LZNT1 | ENGINE_MAXIMUM;
+    let fail = || "The profile could not be compressed.".to_string();
+    let (mut ws, mut frag) = (0u32, 0u32);
+    // LZNT1 can grow incompressible data slightly.
+    let mut out = vec![0u8; data.len() + data.len() / 8 + 4096];
+    let mut size = 0u32;
+    unsafe {
+        if RtlGetCompressionWorkSpaceSize(format, &mut ws, &mut frag) < 0 {
+            return Err(fail());
+        }
+        let mut work = vec![0u8; ws as usize];
+        let status = RtlCompressBuffer(
+            format,
+            data.as_ptr(),
+            data.len() as u32,
+            out.as_mut_ptr(),
+            out.len() as u32,
+            4096,
+            &mut size,
+            work.as_mut_ptr(),
+        );
+        if status < 0 {
+            return Err(fail());
+        }
+    }
+    out.truncate(size as usize);
+    Ok(out)
+}
+
+fn encrypt(data: &[u8]) -> Result<Vec<u8>, String> {
+    use windows::Win32::Security::Cryptography::BCryptEncrypt;
+    let fail = |e: windows::core::Error| format!("The profile could not be encrypted ({e}).");
+    let alg = Alg::open(BCRYPT_AES_ALGORITHM)?;
+    unsafe {
+        let mode: Vec<u16> = BCRYPT_CHAIN_MODE_CBC.as_wide().iter().copied().chain([0]).collect();
+        let mode_bytes = std::slice::from_raw_parts(mode.as_ptr() as *const u8, mode.len() * 2);
+        BCryptSetProperty(alg.0.into(), BCRYPT_CHAINING_MODE, mode_bytes, 0).ok().map_err(fail)?;
+        let mut key = BCRYPT_KEY_HANDLE::default();
+        BCryptGenerateSymmetricKey(alg.0, &mut key, None, KEY, 0).ok().map_err(fail)?;
+        let mut size = 0u32;
+        let mut iv = [0u8; 16];
+        let result = BCryptEncrypt(key, Some(data), None, Some(&mut iv), None, &mut size, BCRYPT_BLOCK_PADDING)
+            .ok()
+            .and_then(|()| {
+                let mut out = vec![0u8; size as usize];
+                let mut iv = [0u8; 16];
+                BCryptEncrypt(key, Some(data), None, Some(&mut iv), Some(&mut out), &mut size, BCRYPT_BLOCK_PADDING)
+                    .ok()
+                    .map(|()| {
+                        out.truncate(size as usize);
+                        out
+                    })
+            });
+        let _ = BCryptDestroyKey(key);
+        result.map_err(fail)
+    }
+}
+
 #[cfg(test)]
 mod round_trip {
     use super::*;
-    use windows::Win32::Security::Cryptography::BCryptEncrypt;
-
-    #[link(name = "ntdll", kind = "raw-dylib")]
-    extern "system" {
-        fn RtlGetCompressionWorkSpaceSize(format: u16, buffer_ws: *mut u32, fragment_ws: *mut u32) -> i32;
-        fn RtlCompressBuffer(
-            format: u16,
-            uncompressed: *const u8,
-            uncompressed_size: u32,
-            compressed: *mut u8,
-            compressed_size: u32,
-            chunk_size: u32,
-            final_size: *mut u32,
-            workspace: *mut u8,
-        ) -> i32;
-    }
-
-    fn header(kind: u8, plain: &[u8], body: &[u8]) -> Vec<u8> {
-        let mut file = FOURCC.to_vec();
-        file.push(kind);
-        file.extend(sha256(plain).unwrap());
-        file.extend(body);
-        file
-    }
 
     #[test]
-    fn compressed_profile_decodes() {
+    fn every_format_reads_back() {
         let xml = r#"<root version="5"><apps><item path="C:\a.exe" is_enabled="true" /></apps></root>"#.repeat(20);
-        let (mut ws, mut frag) = (0u32, 0u32);
-        let mut out = vec![0u8; xml.len() * 2 + 64];
-        let mut size = 0u32;
-        unsafe {
-            assert!(RtlGetCompressionWorkSpaceSize(COMPRESSION_FORMAT_LZNT1, &mut ws, &mut frag) >= 0);
-            let mut work = vec![0u8; ws as usize];
-            let status = RtlCompressBuffer(
-                COMPRESSION_FORMAT_LZNT1,
-                xml.as_ptr(),
-                xml.len() as u32,
-                out.as_mut_ptr(),
-                out.len() as u32,
-                4096,
-                &mut size,
-                work.as_mut_ptr(),
-            );
-            assert!(status >= 0);
+        for format in [Format::Plain, Format::Compressed, Format::Encrypted] {
+            let bytes = encode(&xml, format).unwrap();
+            assert_eq!(bytes.starts_with(b"SWC"), format != Format::Plain);
+            assert_eq!(decode(&bytes).unwrap(), xml, "{format:?}");
         }
-        out.truncate(size as usize);
-        assert_eq!(decode(&header(COMPRESSED, xml.as_bytes(), &out)).unwrap(), xml);
-    }
-
-    #[test]
-    fn encrypted_profile_decodes() {
-        let xml = b"<root version=\"5\"><rules_custom /></root>";
-        let alg = Alg::open(BCRYPT_AES_ALGORITHM).unwrap();
-        let body = unsafe {
-            let mode: Vec<u16> = BCRYPT_CHAIN_MODE_CBC.as_wide().iter().copied().chain([0]).collect();
-            let mode_bytes = std::slice::from_raw_parts(mode.as_ptr() as *const u8, mode.len() * 2);
-            BCryptSetProperty(alg.0.into(), BCRYPT_CHAINING_MODE, mode_bytes, 0).ok().unwrap();
-            let mut key = BCRYPT_KEY_HANDLE::default();
-            BCryptGenerateSymmetricKey(alg.0, &mut key, None, KEY, 0).ok().unwrap();
-            let mut iv = [0u8; 16];
-            let mut size = 0u32;
-            BCryptEncrypt(key, Some(xml), None, Some(&mut iv), None, &mut size, BCRYPT_BLOCK_PADDING).ok().unwrap();
-            let mut out = vec![0u8; size as usize];
-            let mut iv = [0u8; 16];
-            BCryptEncrypt(key, Some(xml), None, Some(&mut iv), Some(&mut out), &mut size, BCRYPT_BLOCK_PADDING)
-                .ok()
-                .unwrap();
-            let _ = BCryptDestroyKey(key);
-            out
-        };
-        assert_eq!(decode(&header(ENCRYPTED, xml, &body)).unwrap().as_bytes(), xml);
+        assert!(encode(&xml, Format::Compressed).unwrap().len() < xml.len() / 2);
     }
 }

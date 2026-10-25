@@ -123,7 +123,9 @@ pub fn save(profile: &Profile) -> Result<PathBuf, String> {
     }
     // Write beside and rename, so a crash mid-write cannot leave half a profile.
     let temp = path.with_extension("xml.tmp");
-    fs::write(&temp, write_user(profile)).map_err(|e| e.to_string())?;
+    let format = crate::swc::Format::from_setting(profile.settings.profile_type);
+    let bytes = crate::swc::encode(&write_user(profile), format)?;
+    fs::write(&temp, bytes).map_err(|e| e.to_string())?;
     fs::rename(&temp, &path).map_err(|e| e.to_string())?;
     Ok(path)
 }
