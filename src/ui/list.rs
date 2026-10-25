@@ -324,7 +324,7 @@ impl List<'_> {
             }
             let sorted = self.sort.column == index;
             let color = if sorted { theme::text() } else { theme::text_muted() };
-            let galley = single_line(painter, crate::i18n::t(column.title), theme::semibold(12.0), color, width - PAD * 2.0 - 12.0);
+            let galley = single_line(painter, crate::i18n::t(column.title), theme::semibold(12.0), color, width - PAD * 2.0 - ARROW_ROOM);
             let text_x = if column.right {
                 cell.right() - PAD - galley.size().x
             } else {
@@ -334,7 +334,8 @@ impl List<'_> {
             let text_width = galley.size().x;
             painter.galley(text_pos, galley, color);
             if sorted {
-                let arrow_x = if column.right { text_x - 10.0 } else { text_x + text_width + 6.0 };
+                let offset = ARROW_ROOM - 3.5;
+                let arrow_x = if column.right { text_x - offset } else { text_x + text_width + offset };
                 paint_sort_arrow(painter, pos2(arrow_x, cell.center().y), self.sort.descending);
             }
             if index + 1 < self.columns.len() {
@@ -518,11 +519,14 @@ fn full_uv() -> Rect {
     Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))
 }
 
-/// The fill column gets what is left. In a narrow window the fixed columns
-/// shrink together so every column stays on screen. `auto` replaces the fixed
-/// widths with measured ones (Autosize columns).
+/// The fill column gets what is left. In a narrow window the wide fixed
+/// columns (addresses, hosts) give up their width first, so short ones such as
+/// State or Total stay readable; only if that is not enough does every column
+/// shrink. `auto` replaces the fixed widths with measured ones (Autosize columns).
 fn column_widths(columns: &[Column], full: f32, auto: Option<&[f32]>) -> Vec<f32> {
     const MIN_FILL: f32 = 140.0;
+    /// Width a column keeps before any column is shrunk below its own width.
+    const KEEP: f32 = 96.0;
     let base: Vec<f32> = columns
         .iter()
         .enumerate()
@@ -532,13 +536,19 @@ fn column_widths(columns: &[Column], full: f32, auto: Option<&[f32]>) -> Vec<f32
         })
         .collect();
     let fixed: f32 = base.iter().sum();
-    let scale = if fixed > 0.0 && full - fixed < MIN_FILL {
-        ((full - MIN_FILL) / fixed).clamp(0.4, 1.0)
+    let budget = full - MIN_FILL;
+    let kept: f32 = base.iter().map(|w| w.min(KEEP)).sum();
+    let widths: Vec<f32> = if fixed <= budget {
+        base.clone()
+    } else if kept <= budget {
+        let ratio = (budget - kept) / (fixed - kept);
+        base.iter().map(|w| w.min(KEEP) + (w - w.min(KEEP)) * ratio).collect()
     } else {
-        1.0
+        let scale = (budget / fixed).clamp(0.4, 1.0);
+        base.iter().map(|w| w * scale).collect()
     };
-    let fill = (full - fixed * scale).max(MIN_FILL);
-    base.iter().map(|w| if *w == 0.0 { fill } else { w * scale }).collect()
+    let fill = (full - widths.iter().sum::<f32>()).max(MIN_FILL);
+    base.iter().zip(widths).map(|(b, w)| if *b == 0.0 { fill } else { w }).collect()
 }
 
 /// Width each fixed column needs for its title and every cell (Autosize columns).
@@ -552,7 +562,7 @@ pub fn measure_columns(ctx: &egui::Context, columns: &[Column], lines: &[Line]) 
                 if column.width == 0.0 {
                     return 0.0;
                 }
-                let mut widest = width(crate::i18n::t(column.title), theme::semibold(12.0)) + 14.0;
+                let mut widest = width(crate::i18n::t(column.title), theme::semibold(12.0)) + ARROW_ROOM;
                 for line in lines {
                     if let Line::Row(row) = line {
                         if let Some(cell) = row.cells.get(i) {
@@ -591,6 +601,17 @@ mod tests {
         let widths = column_widths(&columns, 1000.0, Some(&[0.0, 60.0, 70.0]));
         assert_eq!(&widths[1..], &[60.0, 70.0]);
         assert_eq!(widths[0], 1000.0 - 130.0);
+    }
+
+    #[test]
+    fn narrow_lists_shrink_wide_columns_first() {
+        // Connections with traffic: long IPv6 addresses next to short numbers.
+        let columns = [col(0.0), col(1.0), col(1.0), col(1.0), col(1.0), col(1.0), col(1.0)];
+        let auto = [0.0, 320.0, 320.0, 250.0, 60.0, 90.0, 80.0];
+        let widths = column_widths(&columns, 1000.0, Some(&auto));
+        assert!((widths.iter().sum::<f32>() - 1000.0).abs() < 0.5);
+        assert_eq!(&widths[4..], &[60.0, 90.0, 80.0]);
+        assert!(widths[1] < 320.0 && widths[1] > 96.0);
     }
 
     #[test]
@@ -651,6 +672,9 @@ fn paint_group(painter: &Painter, rect: Rect, title: &str, collapsed: bool, hove
         painter.hline(line_x..=rect.right() - PAD, rect.center().y, Stroke::new(1.0_f32, theme::border()));
     }
 }
+
+/// Room beside a header title for the sort arrow: a gap, then the 7 px arrow.
+const ARROW_ROOM: f32 = 15.0;
 
 fn paint_sort_arrow(painter: &Painter, center: Pos2, descending: bool) {
     let points = if descending {
