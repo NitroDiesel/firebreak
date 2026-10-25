@@ -1,7 +1,7 @@
 //! Notification for a blocked app, like the C build's notification dialog:
 //! the app, its path, address, port, protocol, direction, and date, with Allow
 //! (optionally for a while), Block, and a menu of the less common actions.
-//! It is a separate small always-on-top window above the notification area, so
+//! It is a separate small always-on-top window in the middle of the screen, so
 //! it appears while the main window sits in the tray.
 
 use crate::i18n::t;
@@ -16,12 +16,19 @@ use super::shell;
 use super::theme;
 
 pub const WIDTH: f32 = 420.0;
-/// Header, buttons, and margins; each detail row adds `ROW`.
-const BASE_HEIGHT: f32 = 166.0;
+/// First-frame guess: header, buttons, and margins; each detail row adds `ROW`.
+/// After that the window takes the height its content measured.
+const BASE_HEIGHT: f32 = 190.0;
 const ROW: f32 = 22.0;
+/// Frame margin and stroke on each side.
+const EDGE: f32 = 15.0;
+
+fn measured_id() -> egui::Id {
+    egui::Id::new("alert_height")
+}
 
 impl Alert<'_> {
-    /// Window height for this alert's rows.
+    /// Estimated window height for this alert's rows.
     pub fn height(&self) -> f32 {
         let rows = 5 + usize::from(self.signature.is_some()) + usize::from(self.host.is_some());
         BASE_HEIGHT + rows as f32 * ROW
@@ -43,8 +50,10 @@ pub enum Action {
     Dismiss,
 }
 
-/// Bottom-right of the work area, in points.
+/// Centered in the work area, in points. `height` is used until the content
+/// has been measured once.
 pub fn builder(ctx: &egui::Context, height: f32) -> ViewportBuilder {
+    let height = ctx.data(|d| d.get_temp::<f32>(measured_id())).unwrap_or(height).round();
     let mut builder = ViewportBuilder::default()
         .with_title("simplewall")
         .with_decorations(false)
@@ -55,9 +64,8 @@ pub fn builder(ctx: &egui::Context, height: f32) -> ViewportBuilder {
         .with_inner_size([WIDTH, height]);
     if let Some(area) = shell::work_area() {
         let ppp = ctx.input(|i| i.viewport().native_pixels_per_point).unwrap_or(1.0);
-        let margin = 12.0;
-        let x = area.right as f32 / ppp - WIDTH - margin;
-        let y = area.bottom as f32 / ppp - height - margin;
+        let x = (area.left + area.right) as f32 / 2.0 / ppp - WIDTH / 2.0;
+        let y = (area.top + area.bottom) as f32 / 2.0 / ppp - height / 2.0;
         builder = builder.with_position(pos2(x, y));
     }
     builder
@@ -158,50 +166,64 @@ pub fn show(ctx: &egui::Context, alert: &Alert, files: &mut FileIcons) -> Action
                 row(t("Date"), shell::format_time(p.time));
             });
 
-        ui.add_space(10.0);
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(6.0);
+        // Footer: the less common actions on the left, the decision on the right.
         ui.horizontal(|ui| {
-            let allow = egui::Button::new(RichText::new(t("Allow")).color(theme::text_on(alert.accent))).fill(alert.accent);
-            if ui.add(allow).on_hover_text("Allow network access for this app").clicked() {
-                action = Action::Allow(None);
-            }
-            ui.menu_button("Allow for…", |ui| {
-                for (seconds, label) in TIMERS {
-                    if ui.button(label).clicked() {
+            ui.spacing_mut().button_padding = vec2(12.0, 5.0);
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.menu_button("…", |ui| {
+                if ui.button("Create rule…").clicked() {
+                    ui.close_menu();
+                    action = Action::CreateRule;
+                }
+                if alert.app.kind == crate::model::AppKind::Regular {
+                    if ui.button(t("Open containing folder")).clicked() {
                         ui.close_menu();
-                        action = Action::Allow(Some(seconds));
+                        action = Action::Reveal;
+                    }
+                    if ui.button("Kill process").clicked() {
+                        ui.close_menu();
+                        action = Action::Kill;
                     }
                 }
-            });
-            if ui.button(t("Block")).on_hover_text("Keep it blocked and stop notifying").clicked() {
-                action = Action::Block;
+                ui.separator();
+                if ui.button("Disable notifications for this app").clicked() {
+                    ui.close_menu();
+                    action = Action::Silence;
+                }
+            })
+            .response
+            .on_hover_text("More actions");
+            if alert.count > 1 && ui.button("Next ›").clicked() {
+                action = Action::Next;
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if alert.count > 1 && ui.button("Next ›").clicked() {
-                    action = Action::Next;
+                if ui.button(t("Block")).on_hover_text("Keep it blocked and stop notifying").clicked() {
+                    action = Action::Block;
                 }
-                ui.menu_button("…", |ui| {
-                    if ui.button("Create rule…").clicked() {
-                        ui.close_menu();
-                        action = Action::CreateRule;
-                    }
-                    if alert.app.kind == crate::model::AppKind::Regular {
-                        if ui.button(t("Open containing folder")).clicked() {
+                ui.menu_button("Allow for…", |ui| {
+                    for (seconds, label) in TIMERS {
+                        if ui.button(label).clicked() {
                             ui.close_menu();
-                            action = Action::Reveal;
+                            action = Action::Allow(Some(seconds));
                         }
-                        if ui.button("Kill process").clicked() {
-                            ui.close_menu();
-                            action = Action::Kill;
-                        }
-                    }
-                    ui.separator();
-                    if ui.button("Disable notifications for this app").clicked() {
-                        ui.close_menu();
-                        action = Action::Silence;
                     }
                 });
+                let allow = egui::Button::new(RichText::new(t("Allow")).color(theme::text_on(alert.accent))).fill(alert.accent);
+                if ui.add(allow).on_hover_text("Allow network access for this app").clicked() {
+                    action = Action::Allow(None);
+                }
             });
         });
+        // Size the window to what was laid out, so nothing is clipped.
+        let needed = ui.min_rect().height() + EDGE * 2.0;
+        let known = ctx.data(|d| d.get_temp::<f32>(measured_id()));
+        if known.is_none_or(|h| (h - needed).abs() > 0.5) {
+            ctx.data_mut(|d| d.insert_temp(measured_id(), needed));
+            ctx.request_repaint();
+        }
     });
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         action = Action::Dismiss;

@@ -86,7 +86,7 @@ Filter installs run on a background thread, so the window does not freeze while 
 - simplewall has a tray icon, with the original's menu: Show/Hide, Enable or Disable filters, Notifications, Packets log, Settings, Website, About, and Exit. The icon shows whether filters are on.
 - Minimizing sends the window to the tray. A second launch brings the running window back.
 - Exiting while filters are on asks first. Filters keep working after simplewall exits.
-- When an app that is not allowed tries to connect, a notification appears above the tray. It shows the app, its signer, the address, host name, port, protocol, and time, with Allow, Allow for a set time, Block, and a menu with Create rule, Open containing folder, Kill process, and Disable notifications for this app. Block stops further notifications for that app. The same app waits 60 seconds between notifications, and the sound is skipped while a full-screen app is in front.
+- When an app that is not allowed tries to connect, a notification appears in the middle of the screen. It shows the app, its signer, the address, host name, port, protocol, and time, with Allow, Allow for a set time, Block, and a menu with Create rule, Open containing folder, Kill process, and Disable notifications for this app. Block stops further notifications for that app. The same app waits 60 seconds between notifications, and the sound is skipped while a full-screen app is in front.
 - Apps seen in blocked connections are added to the list automatically.
 - Settings > General has Load on system startup, Start minimized, and Skip UAC warning. The two startup options use Task Scheduler with highest privileges, so no UAC prompt appears.
 
