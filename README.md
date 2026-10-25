@@ -69,6 +69,12 @@ The layout follows the original: a menu bar (File, Edit, View, Settings, Blockli
   | Ctrl+Shift+X | Purge unused apps (asks first) |
   | Ctrl+Shift+T | Purge timers |
 - Search matches a substring. Start it with `re:` to search with a regular expression.
+- The View menu has the original's options:
+  - Always on top, dark theme, and show filenames only.
+  - Autosize columns, to fit each column to its contents.
+  - Show search bar. Ctrl+F shows it again.
+  - Details, Icons, or Tiles view, with small, large, or extra-large icons. "Do not load icons" skips reading app icons.
+  - Language, and Font..., which picks the window's font and size.
 - The theme is dark, light, or the same as Windows. The accent color follows the Windows accent color.
 - The window is in the original's 29 languages (Settings > General > Language), from its language file. Labels worded as in the original are translated; wording new to this port stays English.
 - The last tab, sort order, and window size are kept for next time.
@@ -103,6 +109,7 @@ Checked apps are permitted. A lowest-weight block filter drops every other ALE c
   - Microsoft update. Default: Disable.
   - Microsoft applications. Default: Disable.
 - Apps can be assigned to the built-in system rules in the rule editor, as in the original.
+- Allow Windows Update (Settings menu or Settings > Filters) is the original's Windows Update fix. The Windows Update services run from a copy of svchost.exe named `wusvc.exe`, and that copy is allowed, so updates work while every other svchost.exe service stays blocked.
 - "Until reboot" filters are not persistent. They stay installed until Windows restarts.
 - Timers allow an app until the time runs out, then block it again. Turning a timer off also blocks the app. Timers only count down while simplewall runs; it can sit in the tray. Exiting with timers running asks to end them first.
 - Per-user service instances (such as `CDPUserSvc_1a2b3`) get a new name at every sign-in, so they are not listed. Allow `svchost.exe` to cover them.
@@ -117,6 +124,7 @@ User and custom allow rules sit above the blocklist. To let a blocklist entry wi
 ## Connections and logs
 
 - The Connections tab refreshes every 2 seconds. It lists every TCP state and UDP endpoint, with host names for remote addresses, and optionally the connections of processes that have exited.
+- When run as administrator, the Connections tab shows each connection's download and upload speed and its total traffic. TCP is always measured. UDP and QUIC are measured with "Measure UDP/QUIC traffic" in Settings, through a kernel network trace.
 - The Packets log updates live with connections simplewall blocked.
 - Log to file writes the original's CSV columns to `%USERPROFILE%\simplewall.csv`. The file starts over at a size limit (1 MB by default). Port scans blocked by stealth mode are left out of both logs unless you turn that off.
 
@@ -126,6 +134,7 @@ Create `simplewall.ini` next to the executable to store `profile.xml` in that fo
 
 - The first run imports the original simplewall's profile from `%APPDATA%\Henry++\simplewall\profile.xml`, if there is one.
 - File > Import reads this port's profile or the original's, plain, compressed, or encrypted. File > Export saves the profile anywhere.
+- Settings > Profile type saves the profile as plain XML, compressed, or encrypted, in the original's formats.
 - A day-old copy is kept as `profile.xml.bak`, and is used if the profile cannot be read.
 
 ## Releases
@@ -159,8 +168,4 @@ Install with one installer, not both; they use the same folder. Uninstalling lea
 
 Not carried over:
 
-- Saving profiles compressed or encrypted. They can be read, but are saved as plain XML.
-- The Windows Update fix. It is not needed, because services are matched by SID: allow `wuauserv`, `DoSvc`, and `UsoSvc` on the Services tab.
-- Per-connection UDP traffic statistics.
-- List view options: icon size, view type, and column auto-size.
 - The donate button.
