@@ -72,6 +72,30 @@ impl Tab {
         }
     }
 
+    /// Columns, with download, upload, and total on the Connections tab when
+    /// traffic statistics are available.
+    pub fn columns_for(self, traffic: bool) -> &'static [Column] {
+        const fn col(title: &'static str, width: f32, right: bool) -> Column {
+            Column { title, width, right }
+        }
+        static CONNECTIONS_TRAFFIC: [Column; 9] = [
+            col("Name", 0.0, false),
+            col("Local address", 160.0, false),
+            col("Remote address", 160.0, false),
+            col("Host", 150.0, false),
+            col("Protocol", 60.0, true),
+            col("State", 90.0, true),
+            col("Download", 80.0, true),
+            col("Upload", 80.0, true),
+            col("Total", 80.0, true),
+        ];
+        if traffic && self == Tab::Connections {
+            &CONNECTIONS_TRAFFIC
+        } else {
+            self.columns()
+        }
+    }
+
     pub fn columns(self) -> &'static [Column] {
         const fn col(title: &'static str, width: f32, right: bool) -> Column {
             Column { title, width, right }
@@ -134,6 +158,8 @@ pub struct Source<'a> {
     pub connected: &'a HashSet<String>,
     /// Host names for remote addresses.
     pub hosts: &'a std::collections::HashMap<std::net::IpAddr, Option<String>>,
+    /// Show the traffic columns on the Connections tab.
+    pub traffic: bool,
 }
 
 enum Key {
@@ -444,26 +470,38 @@ fn connections(src: &Source) -> Vec<Entry> {
             if !c.path.is_empty() {
                 hint = format!("{}\n{hint}", c.path);
             }
+            let mut cells = vec![
+                c.name.clone(),
+                c.local.clone(),
+                c.remote.clone(),
+                host,
+                c.proto.to_string(),
+                c.state.to_string(),
+            ];
+            let traffic = c.traffic.unwrap_or_default();
+            if src.traffic {
+                let known = c.traffic.is_some();
+                let show = |text: String| if known { text } else { String::new() };
+                cells.push(show(format!("{}/s", format_bytes(traffic.down_per_sec))));
+                cells.push(show(format!("{}/s", format_bytes(traffic.up_per_sec))));
+                cells.push(show(format_bytes(traffic.total)));
+            }
             let row = Row {
                 id,
-                cells: vec![
-                    c.name.clone(),
-                    c.local.clone(),
-                    c.remote.clone(),
-                    host,
-                    c.proto.to_string(),
-                    c.state.to_string(),
-                ],
+                cells,
                 check: None,
                 icon,
                 fill: None,
                 hint: Some(hint),
             };
-            Entry {
-                group: 0,
-                key: text_key(&row, src.sort.column),
-                row,
-            }
+            // The traffic columns sort by number, not by their text.
+            let key = match src.sort.column {
+                6 if src.traffic => Key::Num(traffic.down_per_sec),
+                7 if src.traffic => Key::Num(traffic.up_per_sec),
+                8 if src.traffic => Key::Num(traffic.total),
+                column => text_key(&row, column),
+            };
+            Entry { group: 0, key, row }
         })
         .collect()
 }
@@ -497,4 +535,32 @@ fn packets(src: &Source) -> Vec<Entry> {
             Entry { group: 0, key, row }
         })
         .collect()
+}
+
+/// 1536 -> "1.5 KB", like `_r_format_bytesize64`.
+pub fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bytes_read_like_the_original() {
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1536), "1.5 KB");
+        assert_eq!(format_bytes(5 * 1024 * 1024), "5.0 MB");
+    }
 }

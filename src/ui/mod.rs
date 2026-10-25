@@ -460,6 +460,7 @@ impl SimplewallApp {
             signers: &signers,
             connected: &self.connected,
             hosts: &hosts,
+            traffic: self.admin,
         };
         self.lines = view::build(self.tab, &source);
         self.unused = self.profile.apps.iter().filter(|a| self.profile.app_is_unused(a)).count();
@@ -474,7 +475,7 @@ impl SimplewallApp {
         self.tab = tab;
         self.dirty = true;
         match tab {
-            Tab::Connections => self.connections = log::connections(self.profile.settings.show_wait_connections),
+            Tab::Connections => self.connections = log::connections(self.profile.settings.show_wait_connections, false),
             Tab::Packets => self.load_packets(),
             _ => {}
         }
@@ -497,7 +498,7 @@ impl SimplewallApp {
     fn refresh(&mut self) {
         self.profile.apps = apps::merge(&self.profile.apps, apps::enumerate());
         match self.tab {
-            Tab::Connections => self.connections = log::connections(self.profile.settings.show_wait_connections),
+            Tab::Connections => self.connections = log::connections(self.profile.settings.show_wait_connections, false),
             Tab::Packets => self.load_packets(),
             _ => {}
         }
@@ -934,7 +935,9 @@ impl SimplewallApp {
     /// tab and the "has a connection" highlight on the app tabs.
     fn sync_connections(&mut self) {
         let s = &self.profile.settings;
-        self.monitor.configure(s.network_monitor, s.show_wait_connections);
+        // Byte counts only while the Connections tab is open; they need administrator rights.
+        let stats = self.admin && self.tab == Tab::Connections;
+        self.monitor.configure(s.network_monitor, s.show_wait_connections, stats, stats && s.udp_traffic);
         if let Some(rows) = self.monitor.latest() {
             let connected: HashSet<String> =
                 rows.iter().filter(|c| c.is_live()).map(|c| c.path.to_lowercase()).collect();
@@ -1765,7 +1768,7 @@ impl SimplewallApp {
                 };
                 List {
                     id: Id::new(("list", index)),
-                    columns: self.tab.columns(),
+                    columns: self.tab.columns_for(self.admin),
                     lines: &self.lines,
                     sort: self.sorts[index],
                     selected: self.selected[index],

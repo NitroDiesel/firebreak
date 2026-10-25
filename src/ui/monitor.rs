@@ -2,37 +2,67 @@
 //! every 2 seconds on its own thread, as `_app_network_threadproc` does, and
 //! only wakes the window when something changed. Host names for remote
 //! addresses are looked up on another thread (IsNetworkResolutionsEnabled).
+//! With traffic statistics on, it also works out each connection's speeds
+//! from two readings, like `_app_network_update_stats_values`.
 
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 
-use crate::log::{self, Endpoint};
+use crate::log::{self, Endpoint, Traffic};
+use crate::udptrace::UdpTrace;
 
 const PERIOD: Duration = Duration::from_secs(2);
 
+/// What the monitor collects; the window updates it every frame.
+#[derive(Default)]
+struct Switches {
+    enabled: AtomicBool,
+    show_waiting: AtomicBool,
+    /// TCP byte counts (needs administrator rights).
+    tcp_stats: AtomicBool,
+    /// UDP byte counts from the kernel network trace (IsUdpTrafficEnabled).
+    udp_stats: AtomicBool,
+}
+
 pub struct Monitor {
     rx: Receiver<Vec<Endpoint>>,
-    enabled: Arc<AtomicBool>,
-    show_waiting: Arc<AtomicBool>,
+    switches: Arc<Switches>,
 }
 
 impl Monitor {
     pub fn spawn(ctx: egui::Context, enabled: bool, show_waiting: bool) -> Self {
         let (tx, rx) = channel();
-        let on = Arc::new(AtomicBool::new(enabled));
-        let waiting = Arc::new(AtomicBool::new(show_waiting));
-        let (on2, waiting2) = (on.clone(), waiting.clone());
+        let switches = Arc::new(Switches::default());
+        switches.enabled.store(enabled, Ordering::Relaxed);
+        switches.show_waiting.store(show_waiting, Ordering::Relaxed);
+        let on = switches.clone();
         std::thread::spawn(move || {
             let mut last: Vec<Endpoint> = Vec::new();
+            let mut udp: Option<UdpTrace> = None;
+            let mut previous: HashMap<String, (u64, u64, Instant)> = HashMap::new();
             loop {
-                if on2.load(Ordering::Relaxed) {
-                    let rows = log::connections(waiting2.load(Ordering::Relaxed));
+                let want_udp = on.udp_stats.load(Ordering::Relaxed);
+                if want_udp && udp.is_none() {
+                    udp = UdpTrace::start().ok();
+                } else if !want_udp {
+                    udp = None;
+                }
+                if on.enabled.load(Ordering::Relaxed) {
+                    let tcp = on.tcp_stats.load(Ordering::Relaxed);
+                    let mut rows = log::connections(on.show_waiting.load(Ordering::Relaxed), tcp);
+                    if let Some(trace) = &udp {
+                        let totals = trace.totals();
+                        for row in rows.iter_mut().filter(|r| r.proto.starts_with("udp")) {
+                            row.bytes = Some(totals.get(&(row.pid, row.local_port)).copied().unwrap_or_default());
+                        }
+                    }
+                    add_traffic(&mut rows, &mut previous);
                     if rows != last {
                         if tx.send(rows.clone()).is_err() {
                             break;
@@ -44,18 +74,42 @@ impl Monitor {
                 std::thread::sleep(PERIOD);
             }
         });
-        Self { rx, enabled: on, show_waiting: waiting }
+        Self { rx, switches }
     }
 
-    pub fn configure(&self, enabled: bool, show_waiting: bool) {
-        self.enabled.store(enabled, Ordering::Relaxed);
-        self.show_waiting.store(show_waiting, Ordering::Relaxed);
+    pub fn configure(&self, enabled: bool, show_waiting: bool, tcp_stats: bool, udp_stats: bool) {
+        let s = &self.switches;
+        s.enabled.store(enabled, Ordering::Relaxed);
+        s.show_waiting.store(show_waiting, Ordering::Relaxed);
+        s.tcp_stats.store(tcp_stats, Ordering::Relaxed);
+        s.udp_stats.store(udp_stats, Ordering::Relaxed);
     }
 
     /// The newest table, if one arrived since the last call.
     pub fn latest(&self) -> Option<Vec<Endpoint>> {
         self.rx.try_iter().last()
     }
+}
+
+/// Speeds from the change since the previous reading of the same connection.
+fn add_traffic(rows: &mut [Endpoint], previous: &mut HashMap<String, (u64, u64, Instant)>) {
+    let now = Instant::now();
+    let mut next = HashMap::new();
+    for row in rows.iter_mut() {
+        let Some((down, up)) = row.bytes else {
+            continue;
+        };
+        let key = format!("{}|{}|{}|{}", row.proto, row.local, row.remote, row.pid);
+        let mut traffic = Traffic { total: down + up, ..Default::default() };
+        if let Some((last_down, last_up, at)) = previous.get(&key) {
+            let ms = now.duration_since(*at).as_millis().max(1) as u64;
+            traffic.down_per_sec = down.saturating_sub(*last_down) * 1000 / ms;
+            traffic.up_per_sec = up.saturating_sub(*last_up) * 1000 / ms;
+        }
+        row.traffic = Some(traffic);
+        next.insert(key, (down, up, now));
+    }
+    *previous = next;
 }
 
 pub struct Resolver {

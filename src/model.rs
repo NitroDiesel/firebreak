@@ -342,6 +342,8 @@ settings! {
     network_monitor: bool = true,
     /// IsNetworkShowWaitConnections: list connections of processes that have exited.
     show_wait_connections: bool = true,
+    /// IsUdpTrafficEnabled: count UDP bytes too, through a kernel network trace.
+    udp_traffic: bool = false,
     /// IsNetworkResolutionsEnabled: look up host names for remote addresses.
     resolve_hostnames: bool = true,
     /// Check GitHub for a newer release once a day.

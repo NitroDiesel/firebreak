@@ -16,6 +16,7 @@ mod rules;
 mod security;
 mod swc;
 mod tray;
+mod udptrace;
 mod ui;
 mod update;
 mod wufix;

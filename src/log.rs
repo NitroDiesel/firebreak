@@ -7,10 +7,12 @@ use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use windows::Win32::NetworkManagement::IpHelper::{
-    GetExtendedTcpTable, GetExtendedUdpTable, MIB_TCP6ROW_OWNER_PID, MIB_TCPROW_OWNER_PID, MIB_UDP6ROW_OWNER_PID,
-    MIB_UDPROW_OWNER_PID, TCP_TABLE_OWNER_PID_ALL, UDP_TABLE_OWNER_PID,
+    GetExtendedTcpTable, GetExtendedUdpTable, GetPerTcp6ConnectionEStats, GetPerTcpConnectionEStats,
+    SetPerTcp6ConnectionEStats, SetPerTcpConnectionEStats, TcpConnectionEstatsData, MIB_TCP6ROW, MIB_TCP6ROW_OWNER_PID,
+    MIB_TCPROW_LH, MIB_TCPROW_LH_0, MIB_TCPROW_OWNER_PID, MIB_TCP_STATE, MIB_UDP6ROW_OWNER_PID, MIB_UDPROW_OWNER_PID,
+    TCP_ESTATS_DATA_ROD_v0, TCP_ESTATS_DATA_RW_v0, TCP_TABLE_OWNER_PID_ALL, UDP_TABLE_OWNER_PID,
 };
-use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6};
+use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6, IN6_ADDR, IN6_ADDR_0};
 
 /// PROC_WAITING_PID: sockets closing on behalf of a process that has exited.
 const WAITING_PID: u32 = 0;
@@ -28,6 +30,20 @@ pub struct Endpoint {
     pub remote_ip: Option<IpAddr>,
     pub state: &'static str,
     pub pid: u32,
+    /// Local port, to match UDP traffic to its socket.
+    pub local_port: u16,
+    /// Bytes received and sent so far, when traffic statistics are on.
+    pub bytes: Option<(u64, u64)>,
+    /// Speeds and total, worked out by the monitor between two readings.
+    pub traffic: Option<Traffic>,
+}
+
+/// Traffic of one connection (download_speed, upload_speed, and total in network.c).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Traffic {
+    pub down_per_sec: u64,
+    pub up_per_sec: u64,
+    pub total: u64,
 }
 
 impl Endpoint {
@@ -40,11 +56,12 @@ impl Endpoint {
 
 /// Every TCP connection in any state, and every UDP endpoint.
 /// `show_waiting` keeps connections that belong to no process any more
-/// (IsNetworkShowWaitConnections).
-pub fn connections(show_waiting: bool) -> Vec<Endpoint> {
+/// (IsNetworkShowWaitConnections). `tcp_stats` reads byte counts of established
+/// TCP connections, which needs administrator rights.
+pub fn connections(show_waiting: bool, tcp_stats: bool) -> Vec<Endpoint> {
     let mut rows = Vec::new();
-    tcp_v4(&mut rows);
-    tcp_v6(&mut rows);
+    tcp_v4(&mut rows, tcp_stats);
+    tcp_v6(&mut rows, tcp_stats);
     udp_v4(&mut rows);
     udp_v6(&mut rows);
     if !show_waiting {
@@ -118,6 +135,9 @@ fn row(proto: &'static str, local: (IpAddr, u16), remote: Option<(IpAddr, u16)>,
         remote_ip: remote.map(|(ip, _)| ip),
         state,
         pid,
+        local_port: local.1,
+        bytes: None,
+        traffic: None,
     }
 }
 
@@ -125,7 +145,7 @@ fn port(raw: u32) -> u16 {
     u16::from_be(raw as u16)
 }
 
-fn tcp_v4(out: &mut Vec<Endpoint>) {
+fn tcp_v4(out: &mut Vec<Endpoint>, stats: bool) {
     let Some(buf) = table(AF_INET.0 as u32, true) else {
         return;
     };
@@ -143,11 +163,16 @@ fn tcp_v4(out: &mut Vec<Endpoint>) {
                 tcp_state(r.dwState),
                 r.dwOwningPid,
             ));
+            if stats && r.dwState == ESTABLISHED {
+                if let Some(last) = out.last_mut() {
+                    last.bytes = tcp4_bytes(r);
+                }
+            }
         }
     }
 }
 
-fn tcp_v6(out: &mut Vec<Endpoint>) {
+fn tcp_v6(out: &mut Vec<Endpoint>, stats: bool) {
     let Some(buf) = table(AF_INET6.0 as u32, true) else {
         return;
     };
@@ -165,8 +190,60 @@ fn tcp_v6(out: &mut Vec<Endpoint>) {
                 tcp_state(r.dwState),
                 r.dwOwningPid,
             ));
+            if stats && r.dwState == ESTABLISHED {
+                if let Some(last) = out.last_mut() {
+                    last.bytes = tcp6_bytes(r);
+                }
+            }
         }
     }
+}
+
+const ESTABLISHED: u32 = 5;
+
+/// Bytes in and out of one IPv4 connection, turning collection on first, as
+/// `_app_network_update_tcp4_stats` does. Needs administrator rights.
+unsafe fn tcp4_bytes(r: &MIB_TCPROW_OWNER_PID) -> Option<(u64, u64)> {
+    let row = MIB_TCPROW_LH {
+        Anonymous: MIB_TCPROW_LH_0 { dwState: r.dwState },
+        dwLocalAddr: r.dwLocalAddr,
+        dwLocalPort: r.dwLocalPort,
+        dwRemoteAddr: r.dwRemoteAddr,
+        dwRemotePort: r.dwRemotePort,
+    };
+    let on = TCP_ESTATS_DATA_RW_v0 { EnableCollection: true };
+    let _ = SetPerTcpConnectionEStats(&row, TcpConnectionEstatsData, as_bytes(&on), 0, 0);
+    let mut rw = TCP_ESTATS_DATA_RW_v0::default();
+    let mut rod = TCP_ESTATS_DATA_ROD_v0::default();
+    let status = GetPerTcpConnectionEStats(&row, TcpConnectionEstatsData, Some(as_bytes_mut(&mut rw)), 0, None, 0, Some(as_bytes_mut(&mut rod)), 0);
+    (status == 0 && rw.EnableCollection).then_some((rod.DataBytesIn, rod.DataBytesOut))
+}
+
+/// The IPv6 version of `tcp4_bytes`.
+unsafe fn tcp6_bytes(r: &MIB_TCP6ROW_OWNER_PID) -> Option<(u64, u64)> {
+    let row = MIB_TCP6ROW {
+        State: MIB_TCP_STATE(r.dwState as i32),
+        LocalAddr: IN6_ADDR { u: IN6_ADDR_0 { Byte: r.ucLocalAddr } },
+        dwLocalScopeId: r.dwLocalScopeId,
+        dwLocalPort: r.dwLocalPort,
+        RemoteAddr: IN6_ADDR { u: IN6_ADDR_0 { Byte: r.ucRemoteAddr } },
+        dwRemoteScopeId: r.dwRemoteScopeId,
+        dwRemotePort: r.dwRemotePort,
+    };
+    let on = TCP_ESTATS_DATA_RW_v0 { EnableCollection: true };
+    let _ = SetPerTcp6ConnectionEStats(&row, TcpConnectionEstatsData, as_bytes(&on), 0, 0);
+    let mut rw = TCP_ESTATS_DATA_RW_v0::default();
+    let mut rod = TCP_ESTATS_DATA_ROD_v0::default();
+    let status = GetPerTcp6ConnectionEStats(&row, TcpConnectionEstatsData, Some(as_bytes_mut(&mut rw)), 0, None, 0, Some(as_bytes_mut(&mut rod)), 0);
+    (status == 0 && rw.EnableCollection).then_some((rod.DataBytesIn, rod.DataBytesOut))
+}
+
+unsafe fn as_bytes<T>(value: &T) -> &[u8] {
+    std::slice::from_raw_parts(value as *const T as *const u8, std::mem::size_of::<T>())
+}
+
+unsafe fn as_bytes_mut<T>(value: &mut T) -> &mut [u8] {
+    std::slice::from_raw_parts_mut(value as *mut T as *mut u8, std::mem::size_of::<T>())
 }
 
 fn udp_v4(out: &mut Vec<Endpoint>) {
@@ -233,10 +310,10 @@ mod tests {
 
     #[test]
     fn connection_table_reads_and_names_states() {
-        let rows = connections(true);
+        let rows = connections(true, false);
         assert!(!rows.is_empty());
         assert!(rows.iter().all(|r| !r.name.is_empty()));
         assert!(rows.iter().filter(|r| r.proto.starts_with("tcp")).all(|r| !r.state.is_empty()));
-        assert!(!connections(false).iter().any(|r| r.pid == WAITING_PID));
+        assert!(!connections(false, false).iter().any(|r| r.pid == WAITING_PID));
     }
 }

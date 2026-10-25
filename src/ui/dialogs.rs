@@ -680,7 +680,12 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                         saved |= ui
                             .checkbox(&mut s.resolve_hostnames, t("Resolve network addresses"))
                             .changed();
+                        saved |= ui
+                            .checkbox(&mut s.udp_traffic, "Measure UDP/QUIC traffic")
+                            .on_hover_text("Counts UDP bytes per socket through a kernel network trace. TCP traffic is always measured.")
+                            .changed();
                         hint(ui, "Apps with an active connection are shown in pink while monitoring is on.");
+                        hint(ui, "Download, upload, and total show on the Connections tab when simplewall runs as administrator.");
                     }
                     Page::Notifications => {
                         section(ui, t("Notifications"));
