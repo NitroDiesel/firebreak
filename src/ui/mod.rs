@@ -609,6 +609,10 @@ impl SimplewallApp {
         let mut live = false;
         for packet in packets {
             let s = &self.profile.settings;
+            // Port scans blocked by stealth mode would flood both logs (IsExcludeStealth).
+            if s.log_exclude_stealth && packet.ours && wfp::is_stealth_filter(&packet.filter) {
+                continue;
+            }
             if s.log_to_file {
                 self.write_log(&packet);
             }
@@ -2084,6 +2088,7 @@ fn tray_state_of(profile: &Profile, filters_on: bool, busy: bool) -> TrayState {
         fullscreen_silent: s.notifications_fullscreen_silent,
         log_file: s.log_to_file,
         log_ui: s.log_ui,
+        single_click: s.tray_single_click,
     }
 }
 

@@ -566,6 +566,9 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                         section(ui, "Window");
                         saved |= ui.checkbox(&mut s.always_on_top, t("Always on top")).changed();
                         saved |= ui.checkbox(&mut s.show_filenames_only, t("Show filenames only")).changed();
+                        saved |= ui
+                            .checkbox(&mut s.tray_single_click, t("Single click on tray icon to open"))
+                            .changed();
                         saved |= ui.checkbox(&mut s.confirm_exit, t("Show confirmation dialog on exit")).changed();
                         if let Some(path) = crate::profile::user_path() {
                             ui.add_space(10.0);
@@ -706,8 +709,11 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                                     .changed();
                             });
                         });
+                        let ui_log = format!("{} ({})", t("Enable packets logging interface"), t("session only"));
+                        saved |= ui.checkbox(&mut s.log_ui, ui_log).changed();
+                        section(ui, t("Exclude"));
                         saved |= ui
-                            .checkbox(&mut s.log_ui, "Enable packets logging interface (session only)")
+                            .checkbox(&mut s.log_exclude_stealth, "Port scans blocked by stealth mode")
                             .changed();
                         hint(ui, &format!("Log file: {}", crate::log::log_path().display()));
                     }

@@ -46,6 +46,14 @@ pub(crate) const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 /// Name of the catch-all block filter (FWN_BLOCK_CONNECTION). A drop by it means
 /// the app itself is not allowed, which is what raises a notification.
 pub(crate) const BLOCK_ALL_NAME: &str = "BlockConnection";
+const STEALTH_ICMP: &str = "BlockIcmpError";
+const STEALTH_TCP: &str = "BlockTcpRstOnClose";
+const BOOT_TIME: &str = "BootTime";
+
+/// Filters that answer port scans and boot-time traffic rather than an app (FWN_ICMP_ERROR and the like).
+pub fn is_stealth_filter(name: &str) -> bool {
+    [STEALTH_ICMP, STEALTH_TCP, BOOT_TIME].contains(&name)
+}
 
 pub(crate) fn win(code: u32, what: &str) -> Result<(), String> {
     if code == 0 {
@@ -384,14 +392,14 @@ unsafe fn add_stealth(engine: HANDLE, persistent: bool) -> Result<(), String> {
     let not_loopback = flags_condition(FWP_MATCH_FLAGS_NONE_SET, LOOPBACK_FLAGS);
     let unreachable = condition_u16(ICMP_TYPE, 3);
     for layer in [FWPM_LAYER_OUTBOUND_ICMP_ERROR_V4, FWPM_LAYER_OUTBOUND_ICMP_ERROR_V6] {
-        add_filter_ex(engine, "BlockIcmpError", layer, WEIGHT_HIGHEST, Action::Block, flags, &mut [not_loopback, unreachable])?;
+        add_filter_ex(engine, STEALTH_ICMP, layer, WEIGHT_HIGHEST, Action::Block, flags, &mut [not_loopback, unreachable])?;
     }
     let not_local = flags_condition(FWP_MATCH_FLAGS_NONE_SET, LOOPBACK_FLAGS | FWP_CONDITION_FLAG_IS_IPSEC_SECURED);
     for (layer, callout) in [
         (FWPM_LAYER_INBOUND_TRANSPORT_V4_DISCARD, FWPM_CALLOUT_WFP_TRANSPORT_LAYER_V4_SILENT_DROP),
         (FWPM_LAYER_INBOUND_TRANSPORT_V6_DISCARD, FWPM_CALLOUT_WFP_TRANSPORT_LAYER_V6_SILENT_DROP),
     ] {
-        add_filter_ex(engine, "BlockTcpRstOnClose", layer, WEIGHT_HIGHEST, Action::Callout(callout), flags, &mut [not_local])?;
+        add_filter_ex(engine, STEALTH_TCP, layer, WEIGHT_HIGHEST, Action::Callout(callout), flags, &mut [not_local])?;
     }
     Ok(())
 }
@@ -414,7 +422,7 @@ unsafe fn add_boot_time(engine: HANDLE, settings: &Settings) -> Result<(), Strin
         FWPM_LAYER_OUTBOUND_ICMP_ERROR_V4,
         FWPM_LAYER_OUTBOUND_ICMP_ERROR_V6,
     ] {
-        add_filter_ex(engine, "BootTime", layer, WEIGHT_IMPORTANT, Action::Permit, flags, &mut [loopback])?;
+        add_filter_ex(engine, BOOT_TIME, layer, WEIGHT_IMPORTANT, Action::Permit, flags, &mut [loopback])?;
     }
     for layer in [
         FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
@@ -424,7 +432,7 @@ unsafe fn add_boot_time(engine: HANDLE, settings: &Settings) -> Result<(), Strin
         FWPM_LAYER_OUTBOUND_ICMP_ERROR_V4,
         FWPM_LAYER_OUTBOUND_ICMP_ERROR_V6,
     ] {
-        add_filter_ex(engine, "BootTime", layer, WEIGHT_LOWEST, Action::Block, flags, &mut [])?;
+        add_filter_ex(engine, BOOT_TIME, layer, WEIGHT_LOWEST, Action::Block, flags, &mut [])?;
     }
     if !settings.allow_ip_forwarding {
         let not_pass_through = flags_condition(
@@ -432,7 +440,7 @@ unsafe fn add_boot_time(engine: HANDLE, settings: &Settings) -> Result<(), Strin
             FWP_CONDITION_FLAG_IS_OUTBOUND_PASS_THRU | FWP_CONDITION_FLAG_IS_INBOUND_PASS_THRU,
         );
         for layer in [FWPM_LAYER_IPFORWARD_V4, FWPM_LAYER_IPFORWARD_V6] {
-            add_filter_ex(engine, "BootTime", layer, WEIGHT_APP, Action::Block, flags, &mut [not_pass_through])?;
+            add_filter_ex(engine, BOOT_TIME, layer, WEIGHT_APP, Action::Block, flags, &mut [not_pass_through])?;
         }
     }
     Ok(())

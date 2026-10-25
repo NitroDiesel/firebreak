@@ -318,6 +318,10 @@ settings! {
     log_ui: bool = true,
     /// LogSizeLimitKb: the log file starts over once it reaches this size. 0 = no limit.
     log_size_limit_kb: u64 = 1024,
+    /// IsExcludeStealth: leave stealth-mode and boot-time drops (port scans) out of the logs.
+    log_exclude_stealth: bool = true,
+    /// IsTrayIconSingleClick: one click on the tray icon shows or hides the window.
+    tray_single_click: bool = true,
     /// IsNotificationsEnabled
     notifications: bool = true,
     /// IsNotificationsSound

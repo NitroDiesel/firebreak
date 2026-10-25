@@ -28,7 +28,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RegisterWindowMessageW, SetForegroundWindow, ShowWindow, TrackPopupMenuEx, TranslateMessage, HICON, HMENU,
     LR_DEFAULTCOLOR, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, MSGFLT_ALLOW,
     SM_CXSMICON, SW_MINIMIZE, SW_RESTORE, TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE,
-    WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_NULL, WNDCLASSW, WS_OVERLAPPED,
+    WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_DESTROY, WM_NULL, WNDCLASSW, WS_OVERLAPPED,
 };
 
 use crate::apps::wide;
@@ -74,6 +74,8 @@ pub struct TrayState {
     pub fullscreen_silent: bool,
     pub log_file: bool,
     pub log_ui: bool,
+    /// IsTrayIconSingleClick: one click toggles the window, otherwise a double click.
+    pub single_click: bool,
 }
 
 struct Shared {
@@ -211,7 +213,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     match msg {
         WM_TRAY => {
             let event = (lparam.0 & 0xFFFF) as u32;
-            if event == NIN_SELECT || event == NIN_KEYSELECT {
+            let single = shared.state.lock().unwrap().single_click;
+            let toggle = match event {
+                NIN_KEYSELECT => true,
+                NIN_SELECT => single,
+                WM_LBUTTONDBLCLK => !single,
+                _ => false,
+            };
+            if toggle {
                 toggle_main(shared);
             } else if event == WM_CONTEXTMENU {
                 if let Some(command) = context_menu(hwnd, shared) {
