@@ -144,4 +144,17 @@ mod tests {
         assert!(xml.contains("<RunLevel>HighestAvailable</RunLevel>"));
         assert!(!task_xml("x", "", "", "u", false).contains("<LogonTrigger>"));
     }
+
+    /// Creates and deletes both real tasks. Needs an elevated console:
+    /// `cargo test autorun -- --ignored`.
+    #[test]
+    #[ignore]
+    fn creates_and_removes_tasks() {
+        for (set, enabled) in [(set_autorun as fn(bool) -> _, autorun_enabled as fn() -> _), (set_skip_uac, skip_uac_enabled)] {
+            set(true).unwrap();
+            assert!(enabled());
+            set(false).unwrap();
+            assert!(!enabled());
+        }
+    }
 }

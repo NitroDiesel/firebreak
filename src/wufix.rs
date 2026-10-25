@@ -121,3 +121,32 @@ fn stop(service: &str) {
         let _ = CloseServiceHandle(manager);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn image_path(service: &str) -> String {
+        let output = std::process::Command::new("reg.exe")
+            .args(["query", &format!(r"HKLM\SYSTEM\CurrentControlSet\Services\{service}"), "/v", "ImagePath"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).to_lowercase()
+    }
+
+    /// Turns the fix on and off again on this machine. Needs an elevated
+    /// console: `cargo test wufix -- --ignored`.
+    #[test]
+    #[ignore]
+    fn points_services_there_and_back() {
+        set(true).unwrap();
+        assert!(wusvc_path().exists());
+        for (service, group) in SERVICES {
+            assert!(image_path(service).contains(&format!(r"\wusvc.exe -k {} -p", group.to_lowercase())));
+        }
+        set(false).unwrap();
+        for (service, group) in SERVICES {
+            assert!(image_path(service).contains(&format!(r"\svchost.exe -k {} -p", group.to_lowercase())));
+        }
+    }
+}
