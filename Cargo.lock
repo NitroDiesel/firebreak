@@ -1067,6 +1067,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
+name = "firebreak"
+version = "4.0.0"
+dependencies = [
+ "eframe",
+ "embed-resource",
+ "image",
+ "quick-xml 0.37.5",
+ "raw-window-handle",
+ "regex",
+ "windows 0.61.3",
+]
+
+[[package]]
 name = "flate2"
 version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2737,19 +2750,6 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
-
-[[package]]
-name = "simplewall"
-version = "3.9.4"
-dependencies = [
- "eframe",
- "embed-resource",
- "image",
- "quick-xml 0.37.5",
- "raw-window-handle",
- "regex",
- "windows 0.61.3",
-]
 
 [[package]]
 name = "slab"

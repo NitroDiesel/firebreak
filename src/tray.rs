@@ -43,12 +43,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::apps::wide;
 
-const CLASS: &str = "simplewall-rust-tray";
+const CLASS: &str = "firebreak-tray";
 const WM_TRAY: u32 = WM_APP + 1;
 /// `NIN_SELECT` and `NIN_KEYSELECT` (WM_USER, WM_USER | NINF_KEY); not exported by the windows crate.
 const NIN_SELECT: u32 = 0x400;
 const NIN_KEYSELECT: u32 = 0x401;
-/// Posted by a second copy of simplewall, so it shows this one instead.
+/// Posted by a second copy of Firebreak, so it shows this one instead.
 const WM_SHOW: u32 = WM_APP + 2;
 const WM_REFRESH: u32 = WM_APP + 3;
 /// wparam 1 = send the main window to the tray, 0 = bring it back.
@@ -175,7 +175,7 @@ impl Drop for Tray {
     }
 }
 
-/// If simplewall is already running, bring its window up and return true.
+/// If Firebreak is already running, bring its window up and return true.
 pub fn signal_running_instance() -> bool {
     let class = wide(CLASS);
     unsafe {
@@ -197,7 +197,7 @@ unsafe fn run(ready: std::sync::mpsc::Sender<Option<isize>>) {
         ..Default::default()
     };
     RegisterClassW(&wc);
-    let title = wide("simplewall tray");
+    let title = wide("Firebreak tray");
     let hwnd = match CreateWindowExW(
         WINDOW_EX_STYLE(0),
         PCWSTR(class.as_ptr()),
@@ -330,11 +330,11 @@ unsafe fn modify_icon(hwnd: HWND, op: windows::Win32::UI::Shell::NOTIFY_ICON_MES
     let icon = load_icon(state_icon(&state), GetSystemMetrics(SM_CXSMICON));
     data.hIcon = icon.unwrap_or_default();
     let tip = if state.busy {
-        "simplewall\nApplying filters"
+        "Firebreak\nApplying filters"
     } else if state.filters_on {
-        "simplewall\nFilters are enabled."
+        "Firebreak\nFilters are enabled."
     } else {
-        "simplewall\nFilters are disabled!"
+        "Firebreak\nFilters are disabled!"
     };
     for (slot, ch) in data.szTip.iter_mut().zip(tip.encode_utf16().take(127)) {
         *slot = ch;

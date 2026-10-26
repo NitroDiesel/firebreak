@@ -132,7 +132,7 @@ enum Action {
     Copy,
 }
 
-pub struct SimplewallApp {
+pub struct FirebreakApp {
     profile: Profile,
     accent: Color32,
     icons: Icons,
@@ -163,6 +163,9 @@ pub struct SimplewallApp {
     keyboard: bool,
     /// Set once the close confirmation was accepted.
     closing: bool,
+    /// Exit was chosen from the File or tray menu. Without it, a close request
+    /// (the X button, Alt+F4) sends the window to the tray instead.
+    exiting: bool,
     tray: Option<Tray>,
     tray_rx: Receiver<TrayCommand>,
     /// Last state sent to the tray, so it is only refreshed on change.
@@ -207,7 +210,7 @@ pub struct SimplewallApp {
     alert_index: usize,
 }
 
-impl SimplewallApp {
+impl FirebreakApp {
     pub fn new(cc: &eframe::CreationContext<'_>, minimized: bool) -> Self {
         let ctx = &cc.egui_ctx;
         let accent = theme::accent();
@@ -278,6 +281,7 @@ impl SimplewallApp {
             underline: None,
             keyboard: false,
             closing: false,
+            exiting: false,
             tray,
             tray_rx,
             tray_state,
@@ -402,7 +406,7 @@ impl SimplewallApp {
                 }
                 Reply::Update { result, manual } => match result {
                     Ok(Some(version)) => {
-                        self.notify(format!("simplewall {version} is available: Help > Download update."), false);
+                        self.notify(format!("Firebreak {version} is available: Help > Download update."), false);
                         self.update_available = Some(version);
                     }
                     Ok(None) if manual => self.notify("You have the latest version.", false),
@@ -756,7 +760,7 @@ impl SimplewallApp {
         };
         let files = &mut self.files;
         let action = ctx.show_viewport_immediate(
-            egui::ViewportId::from_hash_of("simplewall-alert"),
+            egui::ViewportId::from_hash_of("firebreak-alert"),
             notify::builder(ctx, alert.height()),
             |ctx, _| notify::show(ctx, &alert, files),
         );
@@ -1058,10 +1062,10 @@ impl SimplewallApp {
                     self.dialog = Some(Dialog::Confirm(Ask::ClearLog));
                 }
                 TrayCommand::Settings => self.dialog = Some(Dialog::Settings),
-                TrayCommand::Website => shell::open("https://github.com/NitroDiesel/simplewall"),
+                TrayCommand::Website => shell::open(crate::update::REPO_URL),
                 TrayCommand::About => self.dialog = Some(Dialog::About),
                 TrayCommand::Exit => {
-                    self.show_window();
+                    self.exiting = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
                 TrayCommand::Quit => {
@@ -1080,10 +1084,19 @@ impl SimplewallApp {
         self.in_tray = false;
     }
 
-    /// Ask before closing while timers still hold apps open.
+    /// The close button sends the window to the tray, so Firebreak keeps
+    /// running; Exit quits. Ask before quitting while timers still hold apps open.
     fn guard_close(&mut self, ctx: &egui::Context) {
         if self.closing || !ctx.input(|i| i.viewport().close_requested()) {
             return;
+        }
+        if !std::mem::take(&mut self.exiting) {
+            if let Some(tray) = &self.tray {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                tray.hide_main();
+                self.in_tray = true;
+                return;
+            }
         }
         let timers = self.profile.apps.iter().filter(|a| a.has_timer()).count();
         let ask = if !self.filters_on {
@@ -1129,7 +1142,7 @@ impl SimplewallApp {
                 self.profile.apps = apps::merge(&self.profile.apps, apps::enumerate());
                 self.clear_app_selection();
                 self.clear_rule_selection();
-                let source = if found.from_original { "simplewall" } else { "this program" };
+                let source = if found.from_original { "simplewall" } else { "Firebreak" };
                 self.notify(
                     format!("Imported {} apps and {} user rules from a {source} profile.", found.apps, found.rules),
                     false,
@@ -1440,6 +1453,7 @@ impl SimplewallApp {
                         }
                         ui.separator();
                         if ui.button(t("Exit")).clicked() {
+                            self.exiting = true;
                             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                         }
                     });
@@ -1564,7 +1578,7 @@ impl SimplewallApp {
                             ui.menu_button(group.label(), |ui| {
                                 let mut state = self.profile.settings.blocklist(group);
                                 for option in BlocklistState::all() {
-                                    ui.radio_value(&mut state, option, option.label());
+                                    ui.radio_value(&mut state, option, group.option_label(option));
                                 }
                                 if state != self.profile.settings.blocklist(group) {
                                     self.profile.settings.set_blocklist(group, state);
@@ -1577,7 +1591,7 @@ impl SimplewallApp {
                     ui.menu_button(t("Help"), |ui| {
                         if ui.button(t("Website")).clicked() {
                             ui.close_menu();
-                            shell::open("https://github.com/NitroDiesel/simplewall");
+                            shell::open(crate::update::REPO_URL);
                         }
                         if ui.button(t("Check for updates")).clicked() {
                             ui.close_menu();
@@ -2223,7 +2237,7 @@ impl SimplewallApp {
     }
 }
 
-impl eframe::App for SimplewallApp {
+impl eframe::App for FirebreakApp {
     /// Remember the tab, sort orders, and window size for next time.
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         let s = &mut self.profile.settings;

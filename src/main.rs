@@ -1,6 +1,7 @@
-//! Rust port of henrypp/simplewall (GPL-3.0).
-//! The C sources live in `D:\Coding\simplewall-master`. This crate keeps the
-//! WFP provider, the internal rule list, the rule syntax, and the command line.
+//! Firebreak: a Windows Filtering Platform firewall, ported to Rust from
+//! henrypp/simplewall by Henry++ (GPL-3.0). The C sources live in
+//! `D:\Coding\simplewall-master`. This crate keeps the original's WFP provider,
+//! internal rule list, rule syntax, and command line.
 
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
@@ -63,17 +64,17 @@ fn main() {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([980.0, 660.0])
             .with_min_inner_size([640.0, 400.0])
-            .with_title("simplewall")
+            .with_title(model::APP_NAME)
             .with_icon(
-                eframe::icon_data::from_png_bytes(include_bytes!("../resources/icons/simplewall.png"))
+                eframe::icon_data::from_png_bytes(include_bytes!("../resources/icons/firebreak.png"))
                     .unwrap_or_default(),
             ),
         ..Default::default()
     };
     if let Err(err) = eframe::run_native(
-        "simplewall",
+        model::APP_NAME,
         options,
-        Box::new(move |cc| Ok(Box::new(ui::SimplewallApp::new(cc, minimized)))),
+        Box::new(move |cc| Ok(Box::new(ui::FirebreakApp::new(cc, minimized)))),
     ) {
         eprintln!("{err}");
         std::process::exit(1);

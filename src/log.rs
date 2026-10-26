@@ -94,9 +94,9 @@ pub fn append_file(path: &std::path::Path, line: &str) {
 
 pub fn log_path() -> std::path::PathBuf {
     if let Ok(profile) = std::env::var("USERPROFILE") {
-        return std::path::PathBuf::from(profile).join("simplewall.csv");
+        return std::path::PathBuf::from(profile).join("firebreak.csv");
     }
-    std::path::PathBuf::from("simplewall.csv")
+    std::path::PathBuf::from("firebreak.csv")
 }
 
 /// MIB_TCP_STATE names.

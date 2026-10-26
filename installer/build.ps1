@@ -4,7 +4,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-$version = $env:SIMPLEWALL_VERSION
+$version = $env:FIREBREAK_VERSION
 if ($version) { $version = $version -replace '^v', '' }
 if (-not $version) {
     $cargo = Get-Content (Join-Path $root "Cargo.toml") -Raw
@@ -19,8 +19,8 @@ $dist = Join-Path $root "dist"
 Remove-Item $payload -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $payload, $dist | Out-Null
 
-Copy-Item (Join-Path $root "target\release\simplewall.exe") $payload
-Copy-Item (Join-Path $PSScriptRoot "simplewall.ico") $payload
+Copy-Item (Join-Path $root "target\release\firebreak.exe") $payload
+Copy-Item (Join-Path $PSScriptRoot "firebreak.ico") $payload
 Copy-Item (Join-Path $root "LICENSE") $payload
 Copy-Item (Join-Path $root "README.md") $payload
 
@@ -38,24 +38,24 @@ $makensis = @(
 ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 if (-not $makensis) { throw "makensis.exe was not found. Install NSIS on the runner." }
 
-& $makensis "/DVERSION=$version" (Join-Path $PSScriptRoot "simplewall.nsi")
+& $makensis "/DVERSION=$version" (Join-Path $PSScriptRoot "firebreak.nsi")
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # Windows Installer package (.msi). Relative paths in the .wxs resolve from this folder.
 if (-not (Get-Command wix -ErrorAction SilentlyContinue)) { throw "wix was not found. Install the WiX dotnet tool on the runner." }
-$msi = Join-Path $dist "simplewall-$version-setup.msi"
+$msi = Join-Path $dist "firebreak-$version-setup.msi"
 Push-Location $PSScriptRoot
 try {
-    wix build -arch x64 -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext -d "Version=$version" simplewall.wxs -o $msi
+    wix build -arch x64 -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext -d "Version=$version" firebreak.wxs -o $msi
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } finally {
     Pop-Location
 }
 
-$portable = Join-Path $dist "simplewall-$version-bin.zip"
+$portable = Join-Path $dist "firebreak-$version-bin.zip"
 if (Test-Path $portable) { Remove-Item $portable -Force }
-$files = "simplewall.exe", "simplewall.ico", "LICENSE", "README.md" | ForEach-Object { Join-Path $payload $_ }
+$files = "firebreak.exe", "firebreak.ico", "LICENSE", "README.md" | ForEach-Object { Join-Path $payload $_ }
 Compress-Archive -Path $files -DestinationPath $portable
-Write-Host "setup: $(Join-Path $dist "simplewall-$version-setup.exe")"
+Write-Host "setup: $(Join-Path $dist "firebreak-$version-setup.exe")"
 Write-Host "msi: $msi"
 Write-Host "portable: $portable"

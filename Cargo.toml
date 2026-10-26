@@ -1,8 +1,8 @@
 [package]
-name = "simplewall"
-version = "3.9.4"
+name = "firebreak"
+version = "4.0.0"
 edition = "2021"
-description = "Rust port of simplewall, a Windows Filtering Platform firewall"
+description = "Firebreak: a Windows Filtering Platform firewall, ported to Rust from simplewall by Henry++"
 license = "GPL-3.0-only"
 publish = false
 

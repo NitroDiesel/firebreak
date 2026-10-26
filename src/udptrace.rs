@@ -21,7 +21,7 @@ use windows::Win32::System::Diagnostics::Etw::{
 
 use crate::apps::wide;
 
-const SESSION: &str = "simplewall-rust UDP traffic";
+const SESSION: &str = "Firebreak UDP traffic";
 /// Microsoft-Windows-Kernel-Network.
 const KERNEL_NETWORK: GUID = GUID::from_u128(0x7dd42a49_5329_4832_8dfd_43d979153a88);
 /// KERNEL_NETWORK_KEYWORD_IPV4 | KERNEL_NETWORK_KEYWORD_IPV6.

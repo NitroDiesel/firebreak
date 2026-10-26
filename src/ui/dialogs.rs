@@ -1,6 +1,6 @@
 //! Rule editor, app properties, settings, about, and the filtering confirmation.
 
-use crate::i18n::t;
+use crate::i18n::{recommended, t, t_as};
 use eframe::egui::{self, Align, Color32, Layout, RichText, Ui};
 
 use crate::model::{
@@ -712,8 +712,12 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                     }
                     Page::Filters => {
                         section(ui, t("Allow"));
-                        filters |= ui.checkbox(&mut s.allow_loopback, t("Allow loopback connections for all")).changed();
-                        filters |= ui.checkbox(&mut s.allow_ipv6, t("Allow IPv6 redirections (6to4) for all")).changed();
+                        filters |= ui
+                            .checkbox(&mut s.allow_loopback, recommended(t("Allow loopback connections for all")))
+                            .changed();
+                        filters |= ui
+                            .checkbox(&mut s.allow_ipv6, recommended(t("Allow IPv6 redirections (6to4) for all")))
+                            .changed();
                         filters |= ui.checkbox(&mut s.allow_lan, "Allow local network (LAN)").changed();
                         saved |= ui
                             .checkbox(&mut s.wu_fix, t("Allow Windows Update"))
@@ -723,13 +727,18 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                             .checkbox(&mut s.user_allows_override_blocklist, "User rules take priority over the blocklist")
                             .changed();
                         section(ui, t("Block"));
-                        filters |= ui.checkbox(&mut s.block_outbound, t("Block outbound connections for all")).changed();
-                        filters |= ui.checkbox(&mut s.block_inbound, t("Block inbound connections for all")).changed();
                         filters |= ui
-                            .checkbox(&mut s.stealth_mode, "Use stealth mode (do not answer port scans)")
+                            .checkbox(&mut s.block_outbound, recommended(t("Block outbound connections for all")))
                             .changed();
                         filters |= ui
-                            .checkbox(&mut s.boot_time_filters, t("Enable boot-time filters"))
+                            .checkbox(&mut s.block_inbound, recommended(t("Block inbound connections for all")))
+                            .changed();
+                        filters |= ui
+                            .checkbox(&mut s.stealth_mode, recommended(t_as("Prevent port scanning", "Use stealth mode")))
+                            .on_hover_text("Do not answer port scans, so this PC does not show up in them.")
+                            .changed();
+                        filters |= ui
+                            .checkbox(&mut s.boot_time_filters, recommended(t("Enable boot-time filters")))
                             .on_hover_text("Filter from the moment Windows starts, before the firewall engine loads.")
                             .changed();
                         ui.add_enabled_ui(s.boot_time_filters, |ui| {
@@ -751,7 +760,7 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                                 let mut state = s.blocklist(group);
                                 ui.horizontal(|ui| {
                                     for option in BlocklistState::all() {
-                                        ui.selectable_value(&mut state, option, option.label());
+                                        ui.selectable_value(&mut state, option, group.option_label(option));
                                     }
                                 });
                                 if state != s.blocklist(group) {
@@ -793,7 +802,7 @@ pub fn settings(ctx: &egui::Context, profile: &mut Profile, startup: &mut Startu
                             .on_hover_text("Counts UDP bytes per socket through a kernel network trace. TCP traffic is always measured.")
                             .changed();
                         hint(ui, "Apps with an active connection are shown in pink while monitoring is on.");
-                        hint(ui, "Download, upload, and total show on the Connections tab when simplewall runs as administrator.");
+                        hint(ui, "Download, upload, and total show on the Connections tab when Firebreak runs as administrator.");
                     }
                     Page::Notifications => {
                         section(ui, t("Notifications"));
@@ -872,13 +881,18 @@ pub fn about(ctx: &egui::Context, logo: &egui::TextureHandle) -> Effect {
             ui.add(egui::Image::new((logo.id(), egui::vec2(48.0, 48.0))));
             ui.vertical(|ui| {
                 ui.label(RichText::new(format!("{APP_NAME} {APP_VERSION}")).font(theme::semibold(theme::DISPLAY)));
-                ui.label(RichText::new("Rust port of simplewall by Henry++").color(theme::text_muted()));
+                ui.label(RichText::new("Based on simplewall by Henry++").color(theme::text_muted()));
+                ui.label(RichText::new("Rust port by NitroDiesel").color(theme::text_muted()));
                 ui.label(RichText::new("GNU General Public License v3").small().color(theme::text_muted()));
             });
         });
         ui.add_space(10.0);
-        ui.hyperlink_to("github.com/NitroDiesel/simplewall", "https://github.com/NitroDiesel/simplewall");
-        ui.hyperlink_to("github.com/henrypp/simplewall", "https://github.com/henrypp/simplewall");
+        ui.hyperlink_to("github.com/NitroDiesel/firebreak", crate::update::REPO_URL);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.label("Original:");
+            ui.hyperlink_to("github.com/henrypp/simplewall", "https://github.com/henrypp/simplewall");
+        });
     });
     if !open {
         effect = Effect::Close;
@@ -922,11 +936,11 @@ pub fn confirm(ctx: &egui::Context, ask: Ask, accent: Color32) -> Effect {
         ),
         Ask::ClearLog => (
             "Clear the log?".to_string(),
-            "This deletes simplewall.csv and empties the Packets log.".to_string(),
+            "This deletes firebreak.csv and empties the Packets log.".to_string(),
             "Clear log",
         ),
         Ask::Exit => (
-            "Exit simplewall?".to_string(),
+            "Exit Firebreak?".to_string(),
             t("Installed filters will continue to work even if you exit. Continue?").to_string(),
             t("Exit"),
         ),
@@ -938,7 +952,7 @@ pub fn confirm(ctx: &egui::Context, ask: Ask, accent: Color32) -> Effect {
         Ask::CloseWithTimers(count) => (
             "End running timers?".to_string(),
             format!(
-                "Timers only run while simplewall is open. Closing now blocks the {count} app(s) that have a timer, so they do not keep network access."
+                "Timers only run while Firebreak is open. Closing now blocks the {count} app(s) that have a timer, so they do not keep network access."
             ),
             "End timers and close",
         ),

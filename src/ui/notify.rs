@@ -55,7 +55,7 @@ pub enum Action {
 pub fn builder(ctx: &egui::Context, height: f32) -> ViewportBuilder {
     let height = ctx.data(|d| d.get_temp::<f32>(measured_id())).unwrap_or(height).round();
     let mut builder = ViewportBuilder::default()
-        .with_title("simplewall")
+        .with_title(crate::model::APP_NAME)
         .with_decorations(false)
         .with_always_on_top()
         .with_taskbar(false)

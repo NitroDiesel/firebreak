@@ -5,15 +5,18 @@
 use std::os::windows::process::CommandExt;
 use std::process::Command;
 
-/// Starts simplewall in the tray at sign-in.
-const AUTORUN_TASK: &str = "simplewall-rust";
+/// Starts Firebreak in the tray at sign-in.
+const AUTORUN_TASK: &str = "Firebreak";
 /// No trigger. A non-elevated launch runs it to get an elevated copy without a prompt.
-const SKIP_UAC_TASK: &str = "simplewall-rust-skipuac";
+const SKIP_UAC_TASK: &str = "Firebreak-SkipUAC";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// Both tasks, with their trigger and arguments.
-const TASKS: [(&str, bool, &str); 2] =
-    [(AUTORUN_TASK, true, crate::MINIMIZED_FLAG), (SKIP_UAC_TASK, false, crate::ELEVATED_FLAG)];
+/// Both tasks, with the name used before the rename to Firebreak (4.0), their
+/// trigger, and their arguments.
+const TASKS: [(&str, &str, bool, &str); 2] = [
+    (AUTORUN_TASK, "simplewall-rust", true, crate::MINIMIZED_FLAG),
+    (SKIP_UAC_TASK, "simplewall-rust-skipuac", false, crate::ELEVATED_FLAG),
+];
 
 /// On only when the task starts this exe, as the C build checks: a task left by
 /// a copy elsewhere would start that copy instead.
@@ -47,14 +50,18 @@ pub fn run_skip_uac() -> bool {
 }
 
 /// Point tasks whose exe is gone at this one, so moving the install folder
-/// keeps startup and the skip-UAC launch working. Needs administrator rights.
+/// keeps startup and the skip-UAC launch working, and carry over tasks left
+/// under their old names. Needs administrator rights.
 pub fn repair() {
-    for (name, at_logon, args) in TASKS {
-        if let Some(command) = task_command(name) {
-            if !std::path::Path::new(&command).exists() {
-                let _ = create_task(name, at_logon, args);
-            }
+    for (name, legacy, at_logon, args) in TASKS {
+        let recreate = match task_command(name) {
+            Some(command) => !std::path::Path::new(&command).exists(),
+            None => task_exists(legacy),
+        };
+        if recreate && create_task(name, at_logon, args).is_err() {
+            continue;
         }
+        let _ = delete_task(legacy);
     }
 }
 
@@ -148,7 +155,7 @@ fn task_xml(exe: &str, args: &str, dir: &str, user: &str, at_logon: bool) -> Str
     format!(
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo><Description>simplewall</Description></RegistrationInfo>
+  <RegistrationInfo><Description>Firebreak</Description></RegistrationInfo>
   <Triggers>{triggers}</Triggers>
   <Principals>
     <Principal id="Author">
@@ -201,8 +208,8 @@ mod tests {
 
     #[test]
     fn task_xml_escapes_and_picks_trigger() {
-        let xml = task_xml(r"C:\A & B\simplewall.exe", "-minimized", r"C:\A & B", r"PC\me", true);
-        assert!(xml.contains(r"<Command>C:\A &amp; B\simplewall.exe</Command>"));
+        let xml = task_xml(r"C:\A & B\firebreak.exe", "-minimized", r"C:\A & B", r"PC\me", true);
+        assert!(xml.contains(r"<Command>C:\A &amp; B\firebreak.exe</Command>"));
         assert!(xml.contains("<LogonTrigger>"));
         assert!(xml.contains("<RunLevel>HighestAvailable</RunLevel>"));
         assert!(!task_xml("x", "", "", "u", false).contains("<LogonTrigger>"));
@@ -210,8 +217,8 @@ mod tests {
 
     #[test]
     fn reads_the_command_back() {
-        let xml = task_xml(r"C:\A & B\simplewall.exe", "-elevated", r"C:\A & B", r"PC\me", false);
-        assert_eq!(command_of(&xml).as_deref(), Some(r"C:\A & B\simplewall.exe"));
+        let xml = task_xml(r"C:\A & B\firebreak.exe", "-elevated", r"C:\A & B", r"PC\me", false);
+        assert_eq!(command_of(&xml).as_deref(), Some(r"C:\A & B\firebreak.exe"));
         assert_eq!(command_of("<Task />"), None);
     }
 

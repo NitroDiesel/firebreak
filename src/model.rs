@@ -2,7 +2,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const APP_NAME: &str = "simplewall";
+pub const APP_NAME: &str = "Firebreak";
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// `PROC_SYSTEM_NAME`. WFP reports kernel traffic under this app id, not a file path.
 pub const SYSTEM_APP: &str = "System";
@@ -98,6 +98,23 @@ impl BlocklistGroup {
 
     pub fn all() -> [Self; 3] {
         [Self::Spy, Self::Update, Self::Extra]
+    }
+
+    /// The option the C build marks "(recommended)", which is also the default.
+    pub fn recommended(self) -> BlocklistState {
+        match self {
+            Self::Spy => BlocklistState::Block,
+            Self::Update | Self::Extra => BlocklistState::Disable,
+        }
+    }
+
+    /// The label for `option` in this group, with "(recommended)" on the suggested one.
+    pub fn option_label(self, option: BlocklistState) -> String {
+        if option == self.recommended() {
+            crate::i18n::recommended(option.label())
+        } else {
+            option.label().to_string()
+        }
     }
 }
 
@@ -314,7 +331,7 @@ settings! {
     blocklist_spy: BlocklistState = BlocklistState::Block,
     blocklist_update: BlocklistState = BlocklistState::Disable,
     blocklist_extra: BlocklistState = BlocklistState::Disable,
-    /// IsLogEnabled: write dropped packets to simplewall.csv.
+    /// IsLogEnabled: write dropped packets to firebreak.csv.
     log_to_file: bool = false,
     /// IsLogUiEnabled: collect dropped packets for the Packets log tab.
     log_ui: bool = true,

@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn unsigned_files_have_no_signer() {
-        let path = std::env::temp_dir().join("simplewall-unsigned-test.exe");
+        let path = std::env::temp_dir().join("firebreak-unsigned-test.exe");
         std::fs::write(&path, b"MZ not a real program").unwrap();
         assert_eq!(signer(&path.to_string_lossy(), false), None);
         assert_eq!(

@@ -180,7 +180,7 @@ impl Engine {
     pub(crate) fn open() -> Result<Self, String> {
         unsafe {
             let name = wide(APP_NAME);
-            let desc = wide("simplewall rust session");
+            let desc = wide("Firebreak session");
             let session = FWPM_SESSION0 {
                 displayData: FWPM_DISPLAY_DATA0 {
                     name: PWSTR(name.as_ptr() as *mut _),
@@ -271,8 +271,8 @@ unsafe fn remove_owned(engine: HANDLE) -> Result<(), String> {
 }
 
 unsafe fn add_provider(engine: HANDLE, persistent: bool) -> Result<(), String> {
-    let name = wide("simplewall");
-    let desc = wide("simplewall rust WFP provider");
+    let name = wide(APP_NAME);
+    let desc = wide("Firebreak WFP provider");
     let mut provider = FWPM_PROVIDER0 {
         providerKey: provider_guid(),
         displayData: FWPM_DISPLAY_DATA0 {
@@ -286,8 +286,8 @@ unsafe fn add_provider(engine: HANDLE, persistent: bool) -> Result<(), String> {
 }
 
 unsafe fn add_sublayer(engine: HANDLE, persistent: bool) -> Result<(), String> {
-    let name = wide("simplewall");
-    let desc = wide("simplewall rust sublayer");
+    let name = wide(APP_NAME);
+    let desc = wide("Firebreak sublayer");
     let mut provider = provider_guid();
     let mut layer = FWPM_SUBLAYER0 {
         subLayerKey: sublayer_guid(),
@@ -453,7 +453,7 @@ unsafe fn add_self(engine: HANDLE, persistent: bool) -> Result<(), String> {
         return Ok(());
     };
     if let Some(id) = AppId::file(&path.to_string_lossy()) {
-        add_app_permit(engine, "simplewall", &id, persistent)?;
+        add_app_permit(engine, APP_NAME, &id, persistent)?;
     }
     Ok(())
 }

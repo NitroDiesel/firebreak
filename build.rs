@@ -1,5 +1,5 @@
 //! Embeds the icon, the manifest, and the version information (publisher
-//! NitroDiesel) into simplewall.exe. The .rc is written here so its version
+//! NitroDiesel) into firebreak.exe. The .rc is written here so its version
 //! always matches Cargo.toml.
 
 fn main() {
@@ -25,12 +25,12 @@ BEGIN
     BLOCK "040904B0"
     BEGIN
       VALUE "CompanyName", "NitroDiesel"
-      VALUE "FileDescription", "simplewall (Rust)"
+      VALUE "FileDescription", "Firebreak"
       VALUE "FileVersion", "{version}"
-      VALUE "InternalName", "simplewall"
-      VALUE "LegalCopyright", "GPL-3.0. Rust port by NitroDiesel, based on simplewall by Henry++"
-      VALUE "OriginalFilename", "simplewall.exe"
-      VALUE "ProductName", "simplewall (Rust)"
+      VALUE "InternalName", "firebreak"
+      VALUE "LegalCopyright", "GPL-3.0. Firebreak by NitroDiesel, based on simplewall by Henry++"
+      VALUE "OriginalFilename", "firebreak.exe"
+      VALUE "ProductName", "Firebreak"
       VALUE "ProductVersion", "{version}"
     END
   END
@@ -41,11 +41,11 @@ BEGIN
 END
 "#,
         icon = path("resources/icons/active.ico"),
-        manifest = path("resources/simplewall.manifest"),
+        manifest = path("resources/firebreak.manifest"),
     );
-    let file = out.join("simplewall.rc");
+    let file = out.join("firebreak.rc");
     std::fs::write(&file, rc).unwrap();
     embed_resource::compile(&file, embed_resource::NONE).manifest_required().unwrap();
-    println!("cargo:rerun-if-changed=resources/simplewall.manifest");
+    println!("cargo:rerun-if-changed=resources/firebreak.manifest");
     println!("cargo:rerun-if-changed=resources/icons/active.ico");
 }

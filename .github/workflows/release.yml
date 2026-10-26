@@ -43,14 +43,14 @@ jobs:
         shell: pwsh
         run: ./installer/build.ps1
         env:
-          SIMPLEWALL_VERSION: ${{ steps.version.outputs.version }}
+          FIREBREAK_VERSION: ${{ steps.version.outputs.version }}
 
       # A manual run only builds, so installer changes can be tried before a release.
       - name: Keep the build
         if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
         with:
-          name: simplewall-${{ steps.version.outputs.version }}
+          name: firebreak-${{ steps.version.outputs.version }}
           path: |
             dist/*.exe
             dist/*.msi
@@ -61,18 +61,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
-          name: simplewall ${{ steps.version.outputs.version }}
+          name: Firebreak ${{ steps.version.outputs.version }}
           make_latest: true
           files: |
             dist/*.exe
             dist/*.msi
             dist/*.zip
           body: |
-            Rust port of simplewall, by NitroDiesel.
-            - `simplewall-${{ steps.version.outputs.version }}-setup.exe` is the installer.
-            - `simplewall-${{ steps.version.outputs.version }}-setup.msi` is the Windows Installer package, for deployment with Group Policy, Intune, or `msiexec /i ... /qn`.
-            - `simplewall-${{ steps.version.outputs.version }}-bin.zip` is the portable build.
+            Firebreak, a Windows firewall based on simplewall by Henry++.
+            - `firebreak-${{ steps.version.outputs.version }}-setup.exe` is the installer. Most people want this one.
+            - `firebreak-${{ steps.version.outputs.version }}-setup.msi` is the Windows Installer package, for Group Policy, Intune, or `msiexec /i ... /qn`.
+            - `firebreak-${{ steps.version.outputs.version }}-bin.zip` is the portable build. Put an empty `firebreak.ini` next to `firebreak.exe` to keep the profile in that folder.
 
-            Both installers put simplewall (Rust) in `C:\Program Files\simplewall-rust`, beside the original simplewall, and close a running copy first. Install with either the .exe or the .msi, not both. Uninstalling leaves filters in place, so turn filtering off in the app first.
+            Both installers put Firebreak in `C:\Program Files\Firebreak`, beside the original simplewall, and close a running copy first. They replace simplewall (Rust) 3.9.x, and its settings, startup task, and skip-UAC task carry over. Install with either the .exe or the .msi, not both. Uninstalling leaves filters in place, so turn filtering off in the app first.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

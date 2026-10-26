@@ -75,13 +75,29 @@ fn build(name: &str) -> HashMap<&'static str, &'static str> {
     out
 }
 
-/// resource.rc doubles quotes inside strings; the language file uses \n for line breaks.
+/// resource.rc doubles quotes inside strings; the language file uses \n for line
+/// breaks. Strings that name the program say Firebreak.
 fn unescape(text: &'static str) -> &'static str {
-    if text.contains("\"\"") || text.contains("\\n") {
-        Box::leak(text.replace("\"\"", "\"").replace("\\n", "\n").into_boxed_str())
+    let lower = text.to_ascii_lowercase();
+    if text.contains("\"\"") || text.contains("\\n") || lower.contains("simplewall") {
+        // ASCII lowercasing keeps byte offsets, so matches in `lower` index `text`.
+        let mut renamed = String::with_capacity(text.len());
+        let mut last = 0;
+        for (at, found) in lower.match_indices("simplewall") {
+            renamed.push_str(&text[last..at]);
+            renamed.push_str(crate::model::APP_NAME);
+            last = at + found.len();
+        }
+        renamed.push_str(&text[last..]);
+        Box::leak(renamed.replace("\"\"", "\"").replace("\\n", "\n").into_boxed_str())
     } else {
         text
     }
+}
+
+/// `label (recommended)`, as the original marks its suggested settings.
+pub fn recommended(label: &str) -> String {
+    format!("{label} ({})", t("recommended"))
 }
 
 /// The translation of `english`, or `english` itself.
@@ -124,6 +140,13 @@ mod tests {
         assert_eq!(table.get("File"), Some(&"Datei"));
         assert_eq!(table.get("Apps with timer"), Some(&"Apps mit Timer"));
         assert_eq!(table.get("A string the original never had"), None);
+    }
+
+    #[test]
+    fn translations_name_firebreak() {
+        let table = build("Portuguese (Brazil)");
+        assert_eq!(table.get("About"), Some(&"Sobre o Firebreak"));
+        assert!(table.values().all(|text| !text.to_ascii_lowercase().contains("simplewall")));
     }
 
     #[test]

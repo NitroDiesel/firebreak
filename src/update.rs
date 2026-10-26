@@ -12,9 +12,11 @@ use windows::Win32::Networking::WinHttp::{
 
 use crate::apps::wide;
 
-pub const RELEASES_URL: &str = "https://github.com/NitroDiesel/simplewall/releases/latest";
+/// The project page, for Help > Website and the About box.
+pub const REPO_URL: &str = "https://github.com/NitroDiesel/firebreak";
+pub const RELEASES_URL: &str = "https://github.com/NitroDiesel/firebreak/releases/latest";
 const HOST: &str = "api.github.com";
-const PATH: &str = "/repos/NitroDiesel/simplewall/releases/latest";
+const PATH: &str = "/repos/NitroDiesel/firebreak/releases/latest";
 
 /// The newest release's version if it is newer than this build, None if this
 /// build is current. Errors are for the "Check for updates" menu item.
@@ -60,7 +62,7 @@ impl Drop for Handle {
 
 fn get(host: &str, path: &str) -> Result<String, String> {
     let fail = |what: &str| format!("Could not reach GitHub ({what}).");
-    let agent = wide(&format!("simplewall/{}", crate::model::APP_VERSION));
+    let agent = wide(&format!("Firebreak/{}", crate::model::APP_VERSION));
     let host = wide(host);
     let verb = wide("GET");
     let path = wide(path);

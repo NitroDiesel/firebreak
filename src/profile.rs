@@ -49,7 +49,7 @@ pub struct Imported {
 pub fn import(profile: &mut Profile, bytes: &[u8]) -> Result<Imported, String> {
     let text = crate::swc::decode(bytes)?;
     if !text.contains("<root") {
-        return Err("This is not a simplewall profile.".into());
+        return Err("This is not a Firebreak or simplewall profile.".into());
     }
     let ours = text.contains("<settings") || text.contains("<rules_user");
     let imported = if ours {
@@ -132,28 +132,54 @@ pub fn save(profile: &Profile) -> Result<PathBuf, String> {
 
 /// Where new settings are written.
 ///
-/// Portable mode (`simplewall.ini` beside the exe) stays next to the exe.
-/// Otherwise settings go to `%ProgramData%\simplewall-rust`. Administrator
+/// Portable mode (`firebreak.ini` beside the exe) stays next to the exe.
+/// Otherwise settings go to `%ProgramData%\Firebreak`. Administrator
 /// Protection runs the elevated process under a shadow account, so
 /// `%APPDATA%` from that process is not the profile that exists after reboot
 /// (henrypp/simplewall#2163).
 pub fn user_path() -> Option<PathBuf> {
-    portable_path().or_else(program_data_path).or_else(appdata_path)
+    portable_path().or_else(program_data_path)
 }
 
 /// Newest file the user can still have: portable, then ProgramData, then the
-/// old AppData location so an existing profile is not dropped.
+/// folders older versions used, so an existing profile is not dropped.
 fn load_path() -> Option<PathBuf> {
-    [portable_path(), program_data_path(), appdata_path()]
+    migrate_legacy();
+    [portable_path(), program_data_path(), legacy_program_data_path(), appdata_path()]
         .into_iter()
         .flatten()
         .find(|path| path.exists())
 }
 
+/// Before the rename to Firebreak (4.0), settings were in
+/// `%ProgramData%\simplewall-rust`. Move them over once. Only administrators
+/// can write either folder, so a start without elevation reads the old one.
+fn migrate_legacy() {
+    let (Some(new), Some(old)) = (program_data_path(), legacy_program_data_path()) else {
+        return;
+    };
+    if portable_path().is_some() || new.exists() || !old.exists() || !crate::wfp::is_admin() {
+        return;
+    }
+    let (Some(new_dir), Some(old_dir)) = (new.parent(), old.parent()) else {
+        return;
+    };
+    if fs::create_dir_all(new_dir).is_err() {
+        return;
+    }
+    for file in [old.clone(), backup_path(&old)] {
+        let Some(name) = file.file_name() else { continue };
+        if file.exists() && fs::copy(&file, new_dir.join(name)).is_err() {
+            return;
+        }
+    }
+    let _ = fs::remove_dir_all(old_dir);
+}
+
 fn portable_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
-    if dir.join("simplewall.ini").exists() {
+    if dir.join("firebreak.ini").exists() {
         Some(dir.join("profile.xml"))
     } else {
         None
@@ -161,6 +187,11 @@ fn portable_path() -> Option<PathBuf> {
 }
 
 fn program_data_path() -> Option<PathBuf> {
+    let base = std::env::var_os("ProgramData")?;
+    Some(PathBuf::from(base).join("Firebreak").join("profile.xml"))
+}
+
+fn legacy_program_data_path() -> Option<PathBuf> {
     let base = std::env::var_os("ProgramData")?;
     Some(PathBuf::from(base).join("simplewall-rust").join("profile.xml"))
 }

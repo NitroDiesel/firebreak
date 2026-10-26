@@ -17,7 +17,7 @@ pub fn run(args: &[String]) -> i32 {
         let temp = joined.contains("-temp");
         let silent = joined.contains("-silent");
         if !silent && !wfp::is_admin() {
-            eprintln!("simplewall needs an elevated console to install filters.");
+            eprintln!("Firebreak needs an elevated console to install filters.");
             return 1;
         }
         let mut profile = profile::load();
@@ -64,19 +64,19 @@ fn finish(result: Result<String, String>) -> i32 {
 fn print_help() {
     println!(
         "\
-simplewall {ver} (Rust port)
+Firebreak {ver}, based on simplewall by Henry++
 
-\"simplewall.exe -install\" - enable filtering.
-\"simplewall.exe -install -temp\" - enable filtering until reboot.
-\"simplewall.exe -install -silent\" - enable filtering without prompt.
-\"simplewall.exe -uninstall\" - remove all installed filters.
-\"simplewall.exe -status\" - report whether the provider is installed.
-\"simplewall.exe -help\" - show this message.
+\"firebreak.exe -install\" - enable filtering.
+\"firebreak.exe -install -temp\" - enable filtering until reboot.
+\"firebreak.exe -install -silent\" - enable filtering without prompt.
+\"firebreak.exe -uninstall\" - remove all installed filters.
+\"firebreak.exe -status\" - report whether the provider is installed.
+\"firebreak.exe -help\" - show this message.
 
 With no arguments, the window opens. In an interactive cmd prompt, use
-\"start /wait simplewall.exe -install\" to read the exit code. Create simplewall.ini next to the
+\"start /wait firebreak.exe -install\" to read the exit code. Create firebreak.ini next to the
 executable for a portable profile.xml. Otherwise settings are stored in
-%ProgramData%\\simplewall-rust\\profile.xml.",
+%ProgramData%\\Firebreak\\profile.xml.",
         ver = crate::model::APP_VERSION
     );
 }

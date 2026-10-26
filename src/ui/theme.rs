@@ -401,7 +401,7 @@ impl Icons {
             block: load("block", include_bytes!("../../resources/icons/cross.png")),
             error: load("error", include_bytes!("../../resources/icons/error.png")),
             eye: load("eye", include_bytes!("../../resources/icons/eye.png")),
-            logo: load("logo", include_bytes!("../../resources/icons/simplewall.png")),
+            logo: load("logo", include_bytes!("../../resources/icons/firebreak.png")),
         }
     }
 }
