@@ -50,18 +50,22 @@ pub fn run_skip_uac() -> bool {
 }
 
 /// Point tasks whose exe is gone at this one, so moving the install folder
-/// keeps startup and the skip-UAC launch working, and carry over tasks left
-/// under their old names. Needs administrator rights.
+/// keeps startup and the skip-UAC launch working. An installed copy also
+/// carries over tasks left under their old names; a portable copy leaves them
+/// to the installed one. Needs administrator rights.
 pub fn repair() {
+    let migrate = !crate::profile::is_portable();
     for (name, legacy, at_logon, args) in TASKS {
         let recreate = match task_command(name) {
             Some(command) => !std::path::Path::new(&command).exists(),
-            None => task_exists(legacy),
+            None => migrate && task_exists(legacy),
         };
         if recreate && create_task(name, at_logon, args).is_err() {
             continue;
         }
-        let _ = delete_task(legacy);
+        if migrate {
+            let _ = delete_task(legacy);
+        }
     }
 }
 

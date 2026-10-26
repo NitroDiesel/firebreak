@@ -176,6 +176,11 @@ fn migrate_legacy() {
     let _ = fs::remove_dir_all(old_dir);
 }
 
+/// `firebreak.ini` is next to the exe, so this copy keeps its own profile.
+pub fn is_portable() -> bool {
+    portable_path().is_some()
+}
+
 fn portable_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
