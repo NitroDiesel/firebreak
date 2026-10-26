@@ -321,6 +321,9 @@ impl SimplewallApp {
             app.load_packets();
         }
         app.check_for_updates(false);
+        if app.admin {
+            std::thread::spawn(crate::autorun::repair);
+        }
         app.save();
         if let Some(text) = first_notice {
             app.notify(text, false);
@@ -1005,9 +1008,14 @@ impl SimplewallApp {
         // Minimizing sends the window to the tray, as in the C build.
         let minimized = ctx.input(|i| i.viewport().minimized).unwrap_or(false);
         if self.start_minimized {
-            self.start_minimized = false;
-            tray.hide_main();
-            self.in_tray = true;
+            // The window can go to the tray once eframe has shown it.
+            if tray.prepare_start_in_tray() {
+                self.start_minimized = false;
+                tray.hide_main();
+                self.in_tray = true;
+            } else {
+                ctx.request_repaint();
+            }
         } else if minimized && !self.in_tray {
             tray.hide_main();
             self.in_tray = true;
@@ -1054,6 +1062,10 @@ impl SimplewallApp {
                 TrayCommand::About => self.dialog = Some(Dialog::About),
                 TrayCommand::Exit => {
                     self.show_window();
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                TrayCommand::Quit => {
+                    self.closing = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }

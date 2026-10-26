@@ -20,10 +20,15 @@ Remove-Item $payload -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $payload, $dist | Out-Null
 
 Copy-Item (Join-Path $root "target\release\simplewall.exe") $payload
-Copy-Item (Join-Path $PSScriptRoot "simplewall.exe.manifest") $payload
 Copy-Item (Join-Path $PSScriptRoot "simplewall.ico") $payload
 Copy-Item (Join-Path $root "LICENSE") $payload
 Copy-Item (Join-Path $root "README.md") $payload
+
+# The MSI wizard shows the license as RTF.
+$license = [IO.File]::ReadAllText((Join-Path $root "LICENSE"))
+$license = $license.Replace("\", "\\").Replace("{", "\{").Replace("}", "\}").Replace("`r`n", "`n").Replace("`n", "\par`r`n")
+$rtf = "{\rtf1\ansi\deff0{\fonttbl{\f0 Segoe UI;}}\fs18 " + $license + "}"
+[IO.File]::WriteAllText((Join-Path $payload "license.rtf"), $rtf, [Text.Encoding]::ASCII)
 
 # NSIS setup (.exe)
 $makensis = @(
@@ -41,7 +46,7 @@ if (-not (Get-Command wix -ErrorAction SilentlyContinue)) { throw "wix was not f
 $msi = Join-Path $dist "simplewall-$version-setup.msi"
 Push-Location $PSScriptRoot
 try {
-    wix build -arch x64 -d "Version=$version" simplewall.wxs -o $msi
+    wix build -arch x64 -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext -d "Version=$version" simplewall.wxs -o $msi
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } finally {
     Pop-Location
@@ -49,7 +54,8 @@ try {
 
 $portable = Join-Path $dist "simplewall-$version-bin.zip"
 if (Test-Path $portable) { Remove-Item $portable -Force }
-Compress-Archive -Path (Join-Path $payload "*") -DestinationPath $portable
+$files = "simplewall.exe", "simplewall.ico", "LICENSE", "README.md" | ForEach-Object { Join-Path $payload $_ }
+Compress-Archive -Path $files -DestinationPath $portable
 Write-Host "setup: $(Join-Path $dist "simplewall-$version-setup.exe")"
 Write-Host "msi: $msi"
 Write-Host "portable: $portable"

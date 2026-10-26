@@ -14,7 +14,7 @@ Filters use the original provider `B0D553E2-C6A0-4A9A-AEB8-C752483ED62F` and sub
 cargo build --release
 ```
 
-The binary is `target\release\simplewall.exe`. Opening the window asks for elevation, the same as the original, because filters can only be installed or removed by an administrator. If the prompt is declined, the window still opens, but filters cannot be changed. The exe is a Windows GUI program, so no console window appears.
+The binary is `target\release\simplewall.exe`. Opening the window asks for elevation, the same as the original, because filters can only be installed or removed by an administrator. With Settings > Skip UAC warning on, it starts elevated through a scheduled task instead, with no prompt. If the prompt is declined, the window still opens, but filters cannot be changed. The exe is a Windows GUI program, so no console window appears.
 
 ## Command line
 
@@ -88,7 +88,7 @@ Filter installs run on a background thread, so the window does not freeze while 
 
 ## Tray and notifications
 
-- simplewall has a tray icon, with the original's menu: Show/Hide, Enable or Disable filters, Notifications, Packets log, Settings, Website, About, and Exit. The icon shows whether filters are on.
+- simplewall has a tray icon, with the original's menu: Show/Hide, Enable or Disable filters, Notifications, Packets log, Settings, Website, About, and Exit. The flame turns grey while filters are off, in the tray and in the title bar, as in the original.
 - Minimizing sends the window to the tray. A second launch brings the running window back.
 - Exiting while filters are on asks first. Filters keep working after simplewall exits.
 - When an app that is not allowed tries to connect, a notification appears in the middle of the screen. It shows the app, its signer, the address, host name, port, protocol, and time, with Allow, Allow for a set time, Block, and a menu with Create rule, Open containing folder, Kill process, and Disable notifications for this app. Block stops further notifications for that app. The same app waits 60 seconds between notifications, and the sound is skipped while a full-screen app is in front.
@@ -146,11 +146,11 @@ Create `simplewall.ini` next to the executable to store `profile.xml` in that fo
 
 Releases have three assets, all built on GitHub by the `release` workflow, not on a workstation:
 
-- `simplewall-<version>-setup.exe`: the NSIS installer.
-- `simplewall-<version>-setup.msi`: the Windows Installer package. Use it for Group Policy or Intune, or silently with `msiexec /i simplewall-<version>-setup.msi /qn`. A newer MSI upgrades an older one in place.
+- `simplewall-<version>-setup.exe`: the installer. It installs to `C:\Program Files\simplewall-rust` with the Start menu entry simplewall (Rust), beside the original simplewall rather than over it. It closes a running copy first, and moves an install of 3.9.3 or older out of the original's folder.
+- `simplewall-<version>-setup.msi`: the Windows Installer package. It has the same wizard and folder. Use it for Group Policy or Intune, or silently with `msiexec /i simplewall-<version>-setup.msi /qn`. A newer MSI upgrades an older one in place.
 - `simplewall-<version>-bin.zip`: the portable build.
 
-Install with one installer, not both; they use the same folder. Uninstalling leaves filters installed, so turn filtering off first. To publish, push a `v*` tag, or run the workflow, which takes the version from `Cargo.toml`. simplewall checks for a newer release once a day, and Help > Check for updates checks right away.
+Install with one installer, not both; they use the same folder. Uninstalling removes the startup tasks but leaves filters installed, so turn filtering off first. The exe names NitroDiesel as its publisher in its file properties, but it is not code-signed, so UAC and SmartScreen still say "Unknown publisher". To publish, push a `v*` tag. Running the workflow by hand builds the three files as a workflow artifact without publishing. simplewall checks for a newer release once a day, and Help > Check for updates checks right away.
 
 ## What this port covers
 

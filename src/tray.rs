@@ -6,6 +6,11 @@
 //! The main window is never hidden: eframe stops calling `update` for hidden
 //! windows, which would stop timers and notifications. "In the tray" means
 //! minimized with its taskbar button removed.
+//!
+//! Minimize and restore go through WM_SYSCOMMAND, never a bare ShowWindow:
+//! winit tracks the minimized state only from that message, and with a stale
+//! state its next style update strips WS_MINIMIZE and strands the window at
+//! -32000,-32000 where no click can bring it back.
 
 use crate::i18n::t;
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -13,10 +18,13 @@ use std::sync::mpsc::Sender;
 use std::sync::{Mutex, OnceLock};
 
 use eframe::egui;
-use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::core::{BOOL, PCWSTR};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
+use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONULL};
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Shell::{
     ITaskbarList, Shell_NotifyIconW, TaskbarList, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD,
     NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NOTIFYICONDATAW, NOTIFYICON_VERSION_4,
@@ -24,11 +32,13 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, ChangeWindowMessageFilterEx, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW,
     DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, FindWindowW, GetCursorPos,
-    GetMessageW, GetSystemMetrics, IsIconic, PostMessageW, PostQuitMessage, RegisterClassW,
-    RegisterWindowMessageW, SetForegroundWindow, ShowWindow, TrackPopupMenuEx, TranslateMessage, HICON, HMENU,
-    LR_DEFAULTCOLOR, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, MSGFLT_ALLOW,
-    SM_CXSMICON, SW_MINIMIZE, SW_RESTORE, TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE,
-    WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_DESTROY, WM_NULL, WNDCLASSW, WS_OVERLAPPED,
+    GetMessageW, GetSystemMetrics, GetWindowRect, IsIconic, IsWindowVisible, PostMessageW, PostQuitMessage,
+    RegisterClassW, RegisterWindowMessageW, SendMessageW, SetForegroundWindow, SetWindowPos, SystemParametersInfoW,
+    TrackPopupMenuEx, TranslateMessage, HICON, HMENU, ICON_BIG, ICON_SMALL, LR_DEFAULTCOLOR, MF_CHECKED,
+    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, MSGFLT_ALLOW, SC_MINIMIZE, SC_RESTORE, SM_CXICON,
+    SM_CXSMICON, SPI_GETWORKAREA, SWP_NOACTIVATE, SWP_NOZORDER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_CONTEXTMENU,
+    WM_DESTROY, WM_LBUTTONDBLCLK, WM_NULL, WM_SETICON, WM_SYSCOMMAND, WNDCLASSW, WS_OVERLAPPED,
 };
 
 use crate::apps::wide;
@@ -43,6 +53,8 @@ const WM_SHOW: u32 = WM_APP + 2;
 const WM_REFRESH: u32 = WM_APP + 3;
 /// wparam 1 = send the main window to the tray, 0 = bring it back.
 const WM_MAIN: u32 = WM_APP + 4;
+/// Remove the icon and end the tray thread, when the app exits.
+const WM_DESTROY_TRAY: u32 = WM_APP + 5;
 
 const ICON_ACTIVE: &[u8] = include_bytes!("../resources/icons/active.ico");
 const ICON_INACTIVE: &[u8] = include_bytes!("../resources/icons/inactive.ico");
@@ -62,6 +74,8 @@ pub enum TrayCommand {
     Website,
     About,
     Exit,
+    /// Close without asking: an installer sent WM_CLOSE to the tray window.
+    Quit,
 }
 
 /// Checkmarks and the icon. The window sends a new copy when anything changes.
@@ -118,12 +132,30 @@ impl Tray {
     pub fn set_main_window(&self, hwnd: isize) {
         if let Some(shared) = SHARED.get() {
             shared.main.store(hwnd, Ordering::Relaxed);
+            // Gives the window its state icon.
+            self.post(WM_REFRESH, 0);
         }
     }
 
     /// Minimize the main window and drop its taskbar button.
     pub fn hide_main(&self) {
         self.post(WM_MAIN, 1);
+    }
+
+    /// eframe shows the window only after its first frame, and it has to be
+    /// shown before it can be minimized. Until then, keep it cloaked so a
+    /// start in the tray does not flash it on screen; `hide_main` uncloaks.
+    pub fn prepare_start_in_tray(&self) -> bool {
+        let Some(main) = SHARED.get().and_then(main_hwnd) else {
+            return true;
+        };
+        unsafe {
+            if IsWindowVisible(main).as_bool() {
+                return true;
+            }
+            cloak(main, true);
+        }
+        false
     }
 
     pub fn show_main(&self) {
@@ -139,7 +171,7 @@ impl Tray {
 
 impl Drop for Tray {
     fn drop(&mut self) {
-        self.post(WM_CLOSE, 0);
+        self.post(WM_DESTROY_TRAY, 0);
     }
 }
 
@@ -236,6 +268,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_REFRESH => {
             modify_icon(hwnd, NIM_MODIFY);
+            set_window_icon(shared);
             LRESULT(0)
         }
         WM_MAIN => {
@@ -247,6 +280,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_CLOSE => {
+            // Setup and Windows Installer close a running copy this way before replacing it.
+            let _ = shared.tx.lock().unwrap().send(TrayCommand::Quit);
+            shared.ctx.request_repaint();
+            LRESULT(0)
+        }
+        WM_DESTROY_TRAY => {
             let data = icon_data(hwnd);
             let _ = Shell_NotifyIconW(NIM_DELETE, &data);
             let _ = DestroyWindow(hwnd);
@@ -288,7 +327,7 @@ unsafe fn modify_icon(hwnd: HWND, op: windows::Win32::UI::Shell::NOTIFY_ICON_MES
     let mut data = icon_data(hwnd);
     data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP;
     data.uCallbackMessage = WM_TRAY;
-    let icon = load_icon(if state.filters_on { ICON_ACTIVE } else { ICON_INACTIVE });
+    let icon = load_icon(state_icon(&state), GetSystemMetrics(SM_CXSMICON));
     data.hIcon = icon.unwrap_or_default();
     let tip = if state.busy {
         "simplewall\nApplying filters"
@@ -307,9 +346,44 @@ unsafe fn modify_icon(hwnd: HWND, op: windows::Win32::UI::Shell::NOTIFY_ICON_MES
     }
 }
 
-/// Pick the .ico entry closest to the small-icon size and load it.
-unsafe fn load_icon(ico: &[u8]) -> Option<HICON> {
-    let want = GetSystemMetrics(SM_CXSMICON).max(16) as u32;
+/// The flame while filters are on, grey while they are off (IDI_ACTIVE, IDI_INACTIVE).
+fn state_icon(state: &TrayState) -> &'static [u8] {
+    if state.filters_on {
+        ICON_ACTIVE
+    } else {
+        ICON_INACTIVE
+    }
+}
+
+thread_local! {
+    /// Icons given to the main window, freed when replaced.
+    static WINDOW_ICONS: std::cell::Cell<[isize; 2]> = const { std::cell::Cell::new([0; 2]) };
+}
+
+/// The title bar and taskbar show the tray's state icon too, as the C build's
+/// `_app_setinterfacestate` does.
+unsafe fn set_window_icon(shared: &Shared) {
+    let Some(main) = main_hwnd(shared) else {
+        return;
+    };
+    let ico = state_icon(&shared.state.lock().unwrap());
+    let mut icons = [0isize; 2];
+    for (slot, (kind, metric)) in icons.iter_mut().zip([(ICON_SMALL, SM_CXSMICON), (ICON_BIG, SM_CXICON)]) {
+        if let Some(icon) = load_icon(ico, GetSystemMetrics(metric)) {
+            SendMessageW(main, WM_SETICON, Some(WPARAM(kind as usize)), Some(LPARAM(icon.0 as isize)));
+            *slot = icon.0 as isize;
+        }
+    }
+    for old in WINDOW_ICONS.replace(icons) {
+        if old != 0 {
+            let _ = DestroyIcon(HICON(old as _));
+        }
+    }
+}
+
+/// Pick the .ico entry closest to `size` pixels and load it.
+unsafe fn load_icon(ico: &[u8], size: i32) -> Option<HICON> {
+    let want = size.max(16) as u32;
     let count = u16::from_le_bytes([*ico.get(4)?, *ico.get(5)?]) as usize;
     let mut best: Option<(u32, usize, usize)> = None;
     for i in 0..count {
@@ -339,9 +413,23 @@ unsafe fn taskbar() -> Option<ITaskbarList> {
     Some(list)
 }
 
+unsafe fn cloak(main: HWND, on: bool) {
+    let value = BOOL::from(on);
+    let _ = DwmSetWindowAttribute(
+        main,
+        DWMWA_CLOAK,
+        &value as *const BOOL as *const _,
+        std::mem::size_of::<BOOL>() as u32,
+    );
+}
+
 unsafe fn show_main(shared: &Shared) {
     if let Some(main) = main_hwnd(shared) {
-        let _ = ShowWindow(main, SW_RESTORE);
+        cloak(main, false);
+        if IsIconic(main).as_bool() {
+            SendMessageW(main, WM_SYSCOMMAND, Some(WPARAM(SC_RESTORE as usize)), Some(LPARAM(0)));
+        }
+        bring_on_screen(main);
         if let Some(list) = taskbar() {
             let _ = list.AddTab(main);
         }
@@ -350,14 +438,42 @@ unsafe fn show_main(shared: &Shared) {
     shared.ctx.request_repaint();
 }
 
+/// A window on no monitor (a display was unplugged, or an older build left it
+/// at -32000) moves to the middle of the primary work area at its default size.
+unsafe fn bring_on_screen(main: HWND) {
+    if !MonitorFromWindow(main, MONITOR_DEFAULTTONULL).is_invalid() {
+        return;
+    }
+    let mut area = RECT::default();
+    if SystemParametersInfoW(SPI_GETWORKAREA, 0, Some(&mut area as *mut RECT as *mut _), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0))
+        .is_err()
+    {
+        return;
+    }
+    let scale = GetDpiForWindow(main).max(96) as f32 / 96.0;
+    let mut rect = RECT::default();
+    let _ = GetWindowRect(main, &mut rect);
+    let (mut width, mut height) = (rect.right - rect.left, rect.bottom - rect.top);
+    if width < (640.0 * scale) as i32 || height < (400.0 * scale) as i32 {
+        (width, height) = ((980.0 * scale) as i32, (660.0 * scale) as i32);
+    }
+    width = width.min(area.right - area.left);
+    height = height.min(area.bottom - area.top);
+    let x = area.left + (area.right - area.left - width) / 2;
+    let y = area.top + (area.bottom - area.top - height) / 2;
+    let _ = SetWindowPos(main, None, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 unsafe fn hide_main(shared: &Shared) {
     if let Some(main) = main_hwnd(shared) {
         if !IsIconic(main).as_bool() {
-            let _ = ShowWindow(main, SW_MINIMIZE);
+            SendMessageW(main, WM_SYSCOMMAND, Some(WPARAM(SC_MINIMIZE as usize)), Some(LPARAM(0)));
         }
         if let Some(list) = taskbar() {
             let _ = list.DeleteTab(main);
         }
+        // Cloaked only while starting in the tray; see `prepare_start_in_tray`.
+        cloak(main, false);
     }
 }
 

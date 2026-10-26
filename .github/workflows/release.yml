@@ -22,7 +22,9 @@ jobs:
         run: |
           choco install nsis --no-progress -y
           dotnet tool install --global wix --version 5.0.2
-          Join-Path $env:USERPROFILE ".dotnet\tools" >> $env:GITHUB_PATH
+          $tools = Join-Path $env:USERPROFILE ".dotnet\tools"
+          & (Join-Path $tools "wix.exe") extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2
+          $tools >> $env:GITHUB_PATH
 
       - name: Resolve version
         id: version
@@ -43,7 +45,19 @@ jobs:
         env:
           SIMPLEWALL_VERSION: ${{ steps.version.outputs.version }}
 
+      # A manual run only builds, so installer changes can be tried before a release.
+      - name: Keep the build
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: simplewall-${{ steps.version.outputs.version }}
+          path: |
+            dist/*.exe
+            dist/*.msi
+            dist/*.zip
+
       - name: Publish GitHub release
+        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
@@ -54,11 +68,11 @@ jobs:
             dist/*.msi
             dist/*.zip
           body: |
-            Rust port of simplewall.
-            - `simplewall-${{ steps.version.outputs.version }}-setup.exe` is the NSIS installer.
+            Rust port of simplewall, by NitroDiesel.
+            - `simplewall-${{ steps.version.outputs.version }}-setup.exe` is the installer.
             - `simplewall-${{ steps.version.outputs.version }}-setup.msi` is the Windows Installer package, for deployment with Group Policy, Intune, or `msiexec /i ... /qn`.
             - `simplewall-${{ steps.version.outputs.version }}-bin.zip` is the portable build.
 
-            Install with either the .exe or the .msi, not both. Uninstalling leaves filters in place, so turn filtering off in the app first.
+            Both installers put simplewall (Rust) in `C:\Program Files\simplewall-rust`, beside the original simplewall, and close a running copy first. Install with either the .exe or the .msi, not both. Uninstalling leaves filters in place, so turn filtering off in the app first.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

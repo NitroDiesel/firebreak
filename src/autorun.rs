@@ -11,8 +11,14 @@ const AUTORUN_TASK: &str = "simplewall-rust";
 const SKIP_UAC_TASK: &str = "simplewall-rust-skipuac";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Both tasks, with their trigger and arguments.
+const TASKS: [(&str, bool, &str); 2] =
+    [(AUTORUN_TASK, true, crate::MINIMIZED_FLAG), (SKIP_UAC_TASK, false, crate::ELEVATED_FLAG)];
+
+/// On only when the task starts this exe, as the C build checks: a task left by
+/// a copy elsewhere would start that copy instead.
 pub fn autorun_enabled() -> bool {
-    task_exists(AUTORUN_TASK)
+    runs_this_exe(AUTORUN_TASK)
 }
 
 pub fn set_autorun(on: bool) -> Result<(), String> {
@@ -24,7 +30,7 @@ pub fn set_autorun(on: bool) -> Result<(), String> {
 }
 
 pub fn skip_uac_enabled() -> bool {
-    task_exists(SKIP_UAC_TASK)
+    runs_this_exe(SKIP_UAC_TASK)
 }
 
 pub fn set_skip_uac(on: bool) -> Result<(), String> {
@@ -37,11 +43,68 @@ pub fn set_skip_uac(on: bool) -> Result<(), String> {
 
 /// Start the elevated copy through the skip-UAC task. True when it started.
 pub fn run_skip_uac() -> bool {
-    task_exists(SKIP_UAC_TASK) && schtasks(&["/Run", "/TN", SKIP_UAC_TASK]).is_ok()
+    runs_this_exe(SKIP_UAC_TASK) && schtasks(&["/Run", "/TN", SKIP_UAC_TASK]).is_ok()
+}
+
+/// Point tasks whose exe is gone at this one, so moving the install folder
+/// keeps startup and the skip-UAC launch working. Needs administrator rights.
+pub fn repair() {
+    for (name, at_logon, args) in TASKS {
+        if let Some(command) = task_command(name) {
+            if !std::path::Path::new(&command).exists() {
+                let _ = create_task(name, at_logon, args);
+            }
+        }
+    }
 }
 
 fn task_exists(name: &str) -> bool {
     schtasks(&["/Query", "/TN", name]).is_ok()
+}
+
+fn runs_this_exe(name: &str) -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    task_command(name).is_some_and(|command| command.eq_ignore_ascii_case(&exe.to_string_lossy()))
+}
+
+/// The program a task starts, or None when there is no such task.
+fn task_command(name: &str) -> Option<String> {
+    let output = Command::new("schtasks.exe")
+        .args(["/Query", "/TN", name, "/XML"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    command_of(&oem_to_string(&output.stdout))
+}
+
+fn command_of(xml: &str) -> Option<String> {
+    let start = xml.find("<Command>")? + "<Command>".len();
+    let end = start + xml[start..].find("</Command>")?;
+    let command = xml[start..end]
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&");
+    Some(command.trim_matches('"').to_string())
+}
+
+/// schtasks prints in the console's OEM code page.
+fn oem_to_string(bytes: &[u8]) -> String {
+    use windows::Win32::Globalization::{MultiByteToWideChar, CP_OEMCP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS};
+    let flags = MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0);
+    let len = unsafe { MultiByteToWideChar(CP_OEMCP, flags, bytes, None) };
+    if len <= 0 {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+    let mut wide = vec![0u16; len as usize];
+    unsafe { MultiByteToWideChar(CP_OEMCP, flags, bytes, Some(&mut wide)) };
+    String::from_utf16_lossy(&wide)
 }
 
 fn delete_task(name: &str) -> Result<(), String> {
@@ -143,6 +206,13 @@ mod tests {
         assert!(xml.contains("<LogonTrigger>"));
         assert!(xml.contains("<RunLevel>HighestAvailable</RunLevel>"));
         assert!(!task_xml("x", "", "", "u", false).contains("<LogonTrigger>"));
+    }
+
+    #[test]
+    fn reads_the_command_back() {
+        let xml = task_xml(r"C:\A & B\simplewall.exe", "-elevated", r"C:\A & B", r"PC\me", false);
+        assert_eq!(command_of(&xml).as_deref(), Some(r"C:\A & B\simplewall.exe"));
+        assert_eq!(command_of("<Task />"), None);
     }
 
     /// Creates and deletes both real tasks. Needs an elevated console:
