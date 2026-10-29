@@ -1,7 +1,7 @@
 <!--
   MSI installer for Firebreak (based on simplewall by Henry++), built with WiX v5 on GitHub Actions:
     wix build -arch x64 -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext
-      -d Version=4.0.0 installer/firebreak.wxs -o dist/firebreak-4.0.0-setup.msi
+      -d Version=4.0.1 installer/firebreak.wxs -o dist/firebreak-4.0.1-setup.msi
   It installs beside the original simplewall, never over it. Filters stay
   installed after uninstall, as with the NSIS setup. Turn filtering off in the app first.
   Keep UpgradeCode fixed so a newer MSI replaces an older one in place,

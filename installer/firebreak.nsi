@@ -13,7 +13,7 @@ ManifestDPIAware true
 !include "x64.nsh"
 
 !ifndef VERSION
-  !define VERSION "4.0.0"
+  !define VERSION "4.0.1"
 !endif
 
 !define NAME "Firebreak"
