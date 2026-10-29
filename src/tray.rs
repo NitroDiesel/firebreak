@@ -13,7 +13,7 @@
 //! -32000,-32000 where no click can bring it back.
 
 use crate::i18n::t;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Mutex, OnceLock};
 
@@ -24,6 +24,8 @@ use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
 use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONULL};
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+use windows::Win32::System::Threading::{GetCurrentProcess, SetProcessWorkingSetSize};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Shell::{
     ITaskbarList, Shell_NotifyIconW, TaskbarList, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD,
@@ -32,13 +34,13 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, ChangeWindowMessageFilterEx, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW,
     DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, FindWindowW, GetCursorPos,
-    GetMessageW, GetSystemMetrics, GetWindowRect, IsIconic, IsWindowVisible, PostMessageW, PostQuitMessage,
-    RegisterClassW, RegisterWindowMessageW, SendMessageW, SetForegroundWindow, SetWindowPos, SystemParametersInfoW,
+    GetMessageW, GetSystemMetrics, GetWindowRect, IsIconic, IsWindowVisible, KillTimer, PostMessageW, PostQuitMessage,
+    RegisterClassW, RegisterWindowMessageW, SendMessageW, SetForegroundWindow, SetTimer, SetWindowPos, SystemParametersInfoW,
     TrackPopupMenuEx, TranslateMessage, HICON, HMENU, ICON_BIG, ICON_SMALL, LR_DEFAULTCOLOR, MF_CHECKED,
     MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, MSGFLT_ALLOW, SC_MINIMIZE, SC_RESTORE, SM_CXICON,
     SM_CXSMICON, SPI_GETWORKAREA, SWP_NOACTIVATE, SWP_NOZORDER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
     TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_CONTEXTMENU,
-    WM_DESTROY, WM_LBUTTONDBLCLK, WM_NULL, WM_SETICON, WM_SYSCOMMAND, WNDCLASSW, WS_OVERLAPPED,
+    WM_DESTROY, WM_LBUTTONDBLCLK, WM_NULL, WM_SETICON, WM_SYSCOMMAND, WM_TIMER, WNDCLASSW, WS_OVERLAPPED,
 };
 
 use crate::apps::wide;
@@ -55,6 +57,17 @@ const WM_REFRESH: u32 = WM_APP + 3;
 const WM_MAIN: u32 = WM_APP + 4;
 /// Remove the icon and end the tray thread, when the app exits.
 const WM_DESTROY_TRAY: u32 = WM_APP + 5;
+
+/// While the window is in the tray, its memory (mostly the graphics driver's)
+/// goes back to Windows: shortly after hiding, then again whenever alerts or
+/// the log have grown the working set. Pages come back as they are used.
+const TRIM_TIMER: usize = 1;
+const TRIM_FIRST_MS: u32 = 2_000;
+const TRIM_EVERY_MS: u32 = 60_000;
+/// Growth since the last trim that is worth handing back.
+const TRIM_SLACK: usize = 4 << 20;
+/// Working set right after the last trim; 0 forces the next one.
+static TRIMMED: AtomicUsize = AtomicUsize::new(0);
 
 const ICON_ACTIVE: &[u8] = include_bytes!("../resources/icons/active.ico");
 const ICON_INACTIVE: &[u8] = include_bytes!("../resources/icons/inactive.ico");
@@ -253,7 +266,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 _ => false,
             };
             if toggle {
-                toggle_main(shared);
+                toggle_main(hwnd, shared);
             } else if event == WM_CONTEXTMENU {
                 if let Some(command) = context_menu(hwnd, shared) {
                     let _ = shared.tx.lock().unwrap().send(command);
@@ -273,9 +286,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_MAIN => {
             if wparam.0 == 1 {
-                hide_main(shared);
+                hide_main(hwnd, shared);
             } else {
                 show_main(shared);
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TRIM_TIMER => {
+            match main_hwnd(shared) {
+                Some(main) if IsIconic(main).as_bool() => {
+                    let _ = SetTimer(Some(hwnd), TRIM_TIMER, TRIM_EVERY_MS, None);
+                    trim_memory();
+                }
+                _ => {
+                    let _ = KillTimer(Some(hwnd), TRIM_TIMER);
+                }
             }
             LRESULT(0)
         }
@@ -464,7 +489,7 @@ unsafe fn bring_on_screen(main: HWND) {
     let _ = SetWindowPos(main, None, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
-unsafe fn hide_main(shared: &Shared) {
+unsafe fn hide_main(tray: HWND, shared: &Shared) {
     if let Some(main) = main_hwnd(shared) {
         if !IsIconic(main).as_bool() {
             SendMessageW(main, WM_SYSCOMMAND, Some(WPARAM(SC_MINIMIZE as usize)), Some(LPARAM(0)));
@@ -474,13 +499,32 @@ unsafe fn hide_main(shared: &Shared) {
         }
         // Cloaked only while starting in the tray; see `prepare_start_in_tray`.
         cloak(main, false);
+        TRIMMED.store(0, Ordering::Relaxed);
+        let _ = SetTimer(Some(tray), TRIM_TIMER, TRIM_FIRST_MS, None);
     }
 }
 
-unsafe fn toggle_main(shared: &Shared) {
+/// Hand the working set back to Windows, unless it has barely grown since
+/// the last trim (each one costs a few soft page faults on the next frame).
+unsafe fn trim_memory() {
+    let process = GetCurrentProcess();
+    let mut counters = PROCESS_MEMORY_COUNTERS::default();
+    let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+    if K32GetProcessMemoryInfo(process, &mut counters, size).as_bool()
+        && counters.WorkingSetSize < TRIMMED.load(Ordering::Relaxed) + TRIM_SLACK
+    {
+        return;
+    }
+    let _ = SetProcessWorkingSetSize(process, usize::MAX, usize::MAX);
+    if K32GetProcessMemoryInfo(process, &mut counters, size).as_bool() {
+        TRIMMED.store(counters.WorkingSetSize.max(1), Ordering::Relaxed);
+    }
+}
+
+unsafe fn toggle_main(tray: HWND, shared: &Shared) {
     match main_hwnd(shared) {
         Some(main) if IsIconic(main).as_bool() => show_main(shared),
-        Some(_) => hide_main(shared),
+        Some(_) => hide_main(tray, shared),
         None => {}
     }
 }
@@ -566,7 +610,7 @@ unsafe fn context_menu(hwnd: HWND, shared: &Shared) -> Option<TrayCommand> {
     let _ = DestroyMenu(menu); // also destroys the submenus
 
     if chosen == ID_SHOW {
-        toggle_main(shared);
+        toggle_main(hwnd, shared);
         return None;
     }
     let command = COMMANDS.iter().find(|(id, _)| *id == chosen).map(|(_, c)| *c)?;
