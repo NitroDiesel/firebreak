@@ -972,12 +972,14 @@ impl FirebreakApp {
     }
 
     /// Take the monitor's newest connection table: it refreshes the Connections
-    /// tab and the "has a connection" highlight on the app tabs.
+    /// tab and the "has a connection" highlight on the app tabs. Both are out of
+    /// sight in the tray, so the monitor rests there instead of waking the window.
     fn sync_connections(&mut self) {
         let s = &self.profile.settings;
         // Byte counts only while the Connections tab is open; they need administrator rights.
         let stats = self.admin && self.tab == Tab::Connections;
-        self.monitor.configure(s.network_monitor, s.show_wait_connections, stats, stats && s.udp_traffic);
+        let watch = s.network_monitor && !self.in_tray;
+        self.monitor.configure(watch, s.show_wait_connections, stats, stats && s.udp_traffic);
         if let Some(rows) = self.monitor.latest() {
             let connected: HashSet<String> =
                 rows.iter().filter(|c| c.is_live()).map(|c| c.path.to_lowercase()).collect();
