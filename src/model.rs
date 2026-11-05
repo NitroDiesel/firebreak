@@ -192,6 +192,16 @@ impl AppItem {
     pub fn has_timer(&self) -> bool {
         self.timer_until != 0
     }
+
+    /// The opposite of `_app_isappexists`: a regular app whose file is gone.
+    /// These are the apps shown in red, and the ones Purge unused apps removes.
+    /// Pinned apps always count as present, and a path that cannot be read is
+    /// not proof the file is gone.
+    pub fn is_missing(&self) -> bool {
+        self.kind == AppKind::Regular
+            && !self.pinned
+            && matches!(std::path::Path::new(&self.path).try_exists(), Ok(false))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -467,17 +477,6 @@ impl Profile {
                 && rule.apps.iter().any(|path| path.eq_ignore_ascii_case(&app.path))
         })
     }
-
-    /// `_app_isappunused`: a regular app that is gone from disk, or is not
-    /// enabled, pinned, or named by a rule. Services and UWP packages come from
-    /// the system inventory and are never purged.
-    pub fn app_is_unused(&self, app: &AppItem) -> bool {
-        if app.kind != AppKind::Regular {
-            return false;
-        }
-        let used = app.enabled || app.pinned || self.app_has_rule(app);
-        !used || !std::path::Path::new(&app.path).exists()
-    }
 }
 
 pub fn protocol_label(protocol: u8) -> &'static str {
@@ -522,6 +521,30 @@ pub fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_apps_with_a_missing_file_count_as_missing() {
+        let present = std::env::current_exe().unwrap().to_string_lossy().into_owned();
+        let gone = format!("{present}.gone");
+        let app = |path: &str, kind| AppItem::new(path.to_string(), String::new(), kind);
+
+        // Blocked and silenced apps stay as long as their file does.
+        let mut blocked = app(&present, AppKind::Regular);
+        assert!(!blocked.is_missing());
+        blocked.silent = true;
+        assert!(!blocked.is_missing());
+
+        let mut missing = app(&gone, AppKind::Regular);
+        assert!(missing.is_missing());
+        missing.enabled = true;
+        assert!(missing.is_missing());
+        missing.pinned = true;
+        assert!(!missing.is_missing());
+
+        assert!(!app("NoSuchService", AppKind::Service).is_missing());
+        assert!(!app("S-1-15-2-1", AppKind::Uwp).is_missing());
+        assert!(!app("System", AppKind::System).is_missing());
+    }
 
     #[test]
     fn substring_and_regex_search() {

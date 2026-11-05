@@ -930,9 +930,9 @@ pub fn confirm(ctx: &egui::Context, ask: Ask, accent: Color32) -> Effect {
             t("Disable filtering"),
         ),
         Ask::PurgeUnused(count) => (
-            format!("Remove {count} unused apps?"),
-            "This removes apps that are missing from disk, and apps that are not allowed, pinned, or used by any rule. Running apps come back on the next refresh.".to_string(),
-            "Remove apps",
+            format!("Remove {count} unused {}?", if count == 1 { "app" } else { "apps" }),
+            "This removes apps whose files are missing from disk, the ones shown in red. Pinned apps stay, and so does every app that is still on disk.".to_string(),
+            if count == 1 { "Remove app" } else { "Remove apps" },
         ),
         Ask::ClearLog => (
             "Clear the log?".to_string(),

@@ -281,7 +281,7 @@ fn apps(kind: AppKind, src: &Source) -> Vec<Entry> {
         {
             continue;
         }
-        let exists = app.kind != AppKind::Regular || std::path::Path::new(&app.path).exists();
+        let exists = !app.is_missing();
         let has_rule = profile.app_has_rule(app);
         let system = match app.kind {
             AppKind::Regular => app.path.to_lowercase().starts_with(&windows),

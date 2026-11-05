@@ -483,7 +483,7 @@ impl FirebreakApp {
         };
         self.lines = view::build(self.tab, &source);
         self.widths_stale = true;
-        self.unused = self.profile.apps.iter().filter(|a| self.profile.app_is_unused(a)).count();
+        self.unused = self.profile.apps.iter().filter(|a| a.is_missing()).count();
         self.timers = self.profile.apps.iter().filter(|a| a.has_timer()).count();
         self.dirty = false;
     }
@@ -549,7 +549,7 @@ impl FirebreakApp {
     }
 
     fn ask_purge_unused(&mut self) {
-        let count = self.profile.apps.iter().filter(|a| self.profile.app_is_unused(a)).count();
+        let count = self.profile.apps.iter().filter(|a| a.is_missing()).count();
         if count == 0 {
             self.notify("There are no unused apps.", false);
         } else {
@@ -1167,12 +1167,11 @@ impl FirebreakApp {
 
     fn purge_unused(&mut self) {
         let before = self.profile.apps.len();
-        let keep: Vec<bool> = self.profile.apps.iter().map(|a| !self.profile.app_is_unused(a)).collect();
-        let mut keep = keep.into_iter();
-        self.profile.apps.retain(|_| keep.next().unwrap_or(true));
+        self.profile.apps.retain(|a| !a.is_missing());
         let removed = before - self.profile.apps.len();
         self.clear_app_selection();
-        self.notify(format!("Removed {removed} unused apps."), false);
+        let noun = if removed == 1 { "app" } else { "apps" };
+        self.notify(format!("Removed {removed} unused {noun}."), false);
         self.changed();
     }
 
