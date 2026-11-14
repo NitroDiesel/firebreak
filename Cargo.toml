@@ -1,6 +1,6 @@
 [package]
 name = "firebreak"
-version = "4.0.2"
+version = "4.0.3"
 edition = "2021"
 description = "Firebreak: a Windows Filtering Platform firewall, ported to Rust from simplewall by Henry++"
 license = "GPL-3.0-only"
