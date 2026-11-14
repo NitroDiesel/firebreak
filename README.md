@@ -47,21 +47,15 @@ Firebreak is a Rust port of **[simplewall](https://github.com/henrypp/simplewall
 
 ## Download
 
-Get the latest release from the [Releases page](https://github.com/NitroDiesel/firebreak/releases/latest).
+Get `firebreak-<version>-setup.exe` from the [Releases page](https://github.com/NitroDiesel/firebreak/releases/latest). The `.msi` is for Group Policy, Intune, or silent installs (`msiexec /i firebreak-<version>-setup.msi /qn`), and the `-bin.zip` is the [portable build](#portable-mode).
 
-| File | Use it for |
-| --- | --- |
-| `firebreak-<version>-setup.exe` | Installing on your own PC. Most people want this one. |
-| `firebreak-<version>-setup.msi` | Deployment with Group Policy or Intune, or silent installs: `msiexec /i firebreak-<version>-setup.msi /qn`. |
-| `firebreak-<version>-bin.zip` | The portable build. See [Portable mode](#portable-mode). |
-
-Both installers put Firebreak in `C:\Program Files\Firebreak` with a Start menu entry named Firebreak, close a running copy first, and offer to start it when they finish. They install beside the original simplewall, never over it. Use one installer or the other, not both.
+Both installers put Firebreak in `C:\Program Files\Firebreak`, beside the original simplewall, never over it. Use one installer or the other, not both.
 
 **System requirements**
 
 - Windows 10 or Windows 11, 64-bit (x64).
 - Administrator rights, to install or remove filters.
-- A graphics driver with OpenGL 2.0 or later, which every Windows 10 PC has.
+- A graphics driver with OpenGL 2.0 or later.
 
 **"Unknown publisher" warning.** Firebreak names NitroDiesel as its publisher, but it is not code-signed yet, so Windows SmartScreen and UAC still say "Unknown publisher". Click **More info**, then **Run anyway**.
 
@@ -102,7 +96,6 @@ Filters keep working when Firebreak is closed or not running at all. To stop fil
 - Runs from the tray, starts at sign-in, and skips the UAC prompt if you want.
 - Reads and writes simplewall profiles, plain, compressed, or encrypted.
 - IPv4 and IPv6.
-- Free and open source, GPL-3.0.
 
 ## The window
 
