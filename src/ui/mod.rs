@@ -12,7 +12,7 @@ mod theme;
 mod view;
 
 use crate::i18n::t;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -36,6 +36,8 @@ use view::Tab;
 
 const FIND_ID: &str = "find";
 const NOTICE_SECONDS: u64 = 6;
+/// How long the red-app checks are trusted before the disk is asked again.
+const INVALID_TTL: Duration = Duration::from_secs(10);
 const TAB_SLIDE: f64 = 0.2;
 const HOVER_FADE: f32 = 0.12;
 /// Right padding inside the search box, where the magnifier or clear button sits.
@@ -188,6 +190,10 @@ pub struct FirebreakApp {
     resolver: monitor::Resolver,
     /// Lowercase paths of apps with an established connection.
     connected: HashSet<String>,
+    /// App path to why it is shown in red; see `view::invalid_reason`.
+    invalid: HashMap<String, &'static str>,
+    /// When `invalid` was last checked; None checks again on the next rebuild.
+    invalid_at: Option<Instant>,
     /// Allowed apps waiting for a fresh hash to compare against later.
     hash_baseline: HashSet<String>,
     last_hash_sweep: Instant,
@@ -295,6 +301,8 @@ impl FirebreakApp {
             monitor: monitor::Monitor::spawn(ctx.clone(), network_monitor, show_waiting),
             resolver: monitor::Resolver::spawn(ctx.clone()),
             connected: HashSet::new(),
+            invalid: HashMap::new(),
+            invalid_at: None,
             hash_baseline: HashSet::new(),
             last_hash_sweep: Instant::now(),
             admin: wfp::is_admin(),
@@ -347,6 +355,7 @@ impl FirebreakApp {
     fn changed(&mut self) {
         self.save();
         self.dirty = true;
+        self.invalid_at = None;
         if self.filters_on {
             self.send_install(self.profile.settings.filters_temporary);
         }
@@ -454,7 +463,19 @@ impl FirebreakApp {
         }
     }
 
+    /// Purge unused apps removes the red apps, checked afresh, but never the
+    /// services and packages Windows lists.
+    fn purgeable(app: &AppItem, admin: bool) -> bool {
+        app.kind == AppKind::Regular && view::invalid_reason(app, admin).is_some()
+    }
+
     fn rebuild(&mut self) {
+        if !matches!(self.invalid_at, Some(at) if at.elapsed() < INVALID_TTL) {
+            let admin = self.admin;
+            let reasons = self.profile.apps.iter();
+            self.invalid = reasons.filter_map(|a| Some((a.path.clone(), view::invalid_reason(a, admin)?))).collect();
+            self.invalid_at = Some(Instant::now());
+        }
         let index = self.tab.index();
         let s = &self.profile.settings;
         if s.check_signatures {
@@ -480,10 +501,12 @@ impl FirebreakApp {
             connected: &self.connected,
             hosts: &hosts,
             traffic: self.admin,
+            invalid: &self.invalid,
         };
         self.lines = view::build(self.tab, &source);
         self.widths_stale = true;
-        self.unused = self.profile.apps.iter().filter(|a| a.is_missing()).count();
+        let red = |a: &&AppItem| a.kind == AppKind::Regular && self.invalid.contains_key(&a.path);
+        self.unused = self.profile.apps.iter().filter(red).count();
         self.timers = self.profile.apps.iter().filter(|a| a.has_timer()).count();
         self.dirty = false;
     }
@@ -524,6 +547,7 @@ impl FirebreakApp {
         }
         self.save();
         self.dirty = true;
+        self.invalid_at = None;
     }
 
     fn add_app(&mut self) {
@@ -549,7 +573,7 @@ impl FirebreakApp {
     }
 
     fn ask_purge_unused(&mut self) {
-        let count = self.profile.apps.iter().filter(|a| a.is_missing()).count();
+        let count = self.profile.apps.iter().filter(|a| Self::purgeable(a, self.admin)).count();
         if count == 0 {
             self.notify("There are no unused apps.", false);
         } else {
@@ -1167,7 +1191,8 @@ impl FirebreakApp {
 
     fn purge_unused(&mut self) {
         let before = self.profile.apps.len();
-        self.profile.apps.retain(|a| !a.is_missing());
+        let admin = self.admin;
+        self.profile.apps.retain(|a| !Self::purgeable(a, admin));
         let removed = before - self.profile.apps.len();
         self.clear_app_selection();
         let noun = if removed == 1 { "app" } else { "apps" };

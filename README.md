@@ -442,7 +442,7 @@ New in Firebreak:
 - Filters are installed on a background thread, so the window doesn't freeze while 1,500 blocklist rules are applied.
 - Settings are kept in `%ProgramData%`, so they survive Administrator Protection.
 - Allow local network (LAN), as a single option.
-- Purge unused apps removes only the apps shown in red, whose files are missing. simplewall also removes apps that are still installed but are not allowed, silenced, pinned, or used by a rule.
+- Purge unused apps removes only the apps shown in red: those whose files are missing, and allowed apps whose filter cannot be installed. simplewall also removes apps that are still installed but are not allowed, silenced, pinned, or used by a rule.
 - An MSI package for managed deployment.
 
 Not carried over:

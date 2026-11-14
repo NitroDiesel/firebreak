@@ -931,7 +931,7 @@ pub fn confirm(ctx: &egui::Context, ask: Ask, accent: Color32) -> Effect {
         ),
         Ask::PurgeUnused(count) => (
             format!("Remove {count} unused {}?", if count == 1 { "app" } else { "apps" }),
-            "This removes apps whose files are missing from disk, the ones shown in red. Pinned apps stay, and so does every app that is still on disk.".to_string(),
+            "This removes the apps shown in red: those whose files are missing from disk, and allowed apps whose filter cannot be installed. Pinned apps, services, and store apps stay.".to_string(),
             if count == 1 { "Remove app" } else { "Remove apps" },
         ),
         Ask::ClearLog => (

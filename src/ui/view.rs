@@ -160,6 +160,23 @@ pub struct Source<'a> {
     pub hosts: &'a std::collections::HashMap<std::net::IpAddr, Option<String>>,
     /// Show the traffic columns on the Connections tab.
     pub traffic: bool,
+    /// App path to `invalid_reason`, for the apps shown in red.
+    pub invalid: &'a std::collections::HashMap<String, &'static str>,
+}
+
+/// Why an app is shown in red, like `_app_isappexists`: its file is gone, or it
+/// is allowed and no filter can be made for it. Pinned apps are never red.
+/// Both checks touch the disk, so the app list keeps the answers for a while.
+pub fn invalid_reason(app: &AppItem, admin: bool) -> Option<&'static str> {
+    if app.pinned {
+        None
+    } else if app.is_missing() {
+        Some("File not found")
+    } else if admin && crate::wfp::app_unresolved(app) {
+        Some("Allowed, but its filter cannot be installed")
+    } else {
+        None
+    }
 }
 
 enum Key {
@@ -281,7 +298,8 @@ fn apps(kind: AppKind, src: &Source) -> Vec<Entry> {
         {
             continue;
         }
-        let exists = !app.is_missing();
+        let invalid = src.invalid.get(&app.path).copied();
+        let exists = invalid.is_none();
         let has_rule = profile.app_has_rule(app);
         let system = match app.kind {
             AppKind::Regular => app.path.to_lowercase().starts_with(&windows),
@@ -316,8 +334,8 @@ fn apps(kind: AppKind, src: &Source) -> Vec<Entry> {
             app.display_name.clone()
         };
         let icon = match app.kind {
-            // A missing file shows the error icon too, not only the red fill.
-            AppKind::Regular if !exists => Icon::Error,
+            // A red row shows the error icon too, not only the fill.
+            _ if !exists => Icon::Error,
             AppKind::Regular => Icon::File {
                 path: app.path.clone(),
                 generic: false,
@@ -338,7 +356,7 @@ fn apps(kind: AppKind, src: &Source) -> Vec<Entry> {
         let mut hint = app.path.clone();
         // What the row's fill means, in words.
         for (on, state) in [
-            (!exists, "File not found"),
+            (!exists, invalid.unwrap_or_default()),
             (connected, "Has an active connection"),
             (app.pinned, "Pinned"),
             (system && app.kind == AppKind::Regular, "System file"),
@@ -577,5 +595,29 @@ mod tests {
         assert_eq!(format_bytes(512), "512 B");
         assert_eq!(format_bytes(1536), "1.5 KB");
         assert_eq!(format_bytes(5 * 1024 * 1024), "5.0 MB");
+    }
+
+    #[test]
+    fn red_apps_are_missing_or_allowed_without_a_filter() {
+        let present = std::env::current_exe().unwrap().to_string_lossy().into_owned();
+        let app = |path: &str, kind| AppItem::new(path.to_string(), String::new(), kind);
+
+        // An allowed app Windows can identify is fine.
+        let mut allowed = app(&present, AppKind::Regular);
+        allowed.enabled = true;
+        assert_eq!(invalid_reason(&allowed, true), None);
+
+        let mut gone = app(&format!("{present}.gone"), AppKind::Regular);
+        assert_eq!(invalid_reason(&gone, false), Some("File not found"));
+        gone.pinned = true;
+        assert_eq!(invalid_reason(&gone, true), None);
+
+        // A removed service only matters once it is allowed, and only an
+        // administrator can tell.
+        let mut service = app("NoSuchFirebreakService", AppKind::Service);
+        assert_eq!(invalid_reason(&service, true), None);
+        service.enabled = true;
+        assert!(invalid_reason(&service, true).is_some());
+        assert_eq!(invalid_reason(&service, false), None);
     }
 }

@@ -476,9 +476,16 @@ unsafe fn add_lan(engine: HANDLE, persistent: bool) -> Result<(), String> {
     add_one_rule(engine, &rule, persistent, WEIGHT_IMPORTANT).map(|_| ())
 }
 
+/// True for an allowed app that `add_apps` has to skip because Windows cannot
+/// identify it: a file it cannot open, a removed service, a bad package SID.
+/// Only meaningful as administrator, the one who installs filters.
+pub fn app_unresolved(app: &AppItem) -> bool {
+    app.enabled && AppId::for_app(app).is_none()
+}
+
 unsafe fn add_apps(engine: HANDLE, profile: &Profile, persistent: bool) -> Result<(), String> {
     for app in profile.apps.iter().filter(|app| app.allowed_now()) {
-        // An app that no longer resolves (deleted file, removed service) is skipped.
+        // An app that no longer resolves is skipped, and shown in red; see `app_unresolved`.
         if let Some(id) = AppId::for_app(app) {
             add_app_permit(engine, &app.display_name, &id, persistent)?;
         }
